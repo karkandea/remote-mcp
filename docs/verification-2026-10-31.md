@@ -21,7 +21,9 @@
 - Ubuntu connected as a non-root ops user.
 - Node.js 22.23.3 and Docker available.
 - Root filesystem usage approximately 87% (53 GiB of 64 GiB used; approximately 8.3 GiB free at inspection).
-- **No runner, webhook listener, background service, production deployment, or extra dependencies were installed**. Isolated CI provisioning remains blocked pending host/resource safety review.
+- Trusted `main` commit cloned to `/home/arkan-ops/remote-mcp-ci` under non-root ops account.
+- Manual `bash scripts/ci.sh` **exit 0**, 11/11 tests passed, build/typecheck passed, `npm audit` found 0 vulnerabilities.
+- **No automated runner, webhook listener, background service, production application deployment, or system-wide dependencies were installed**. Node packages were installed only inside the separate CI checkout. Isolated automation remains blocked pending host/resource safety review.
 
 ## Not yet verified
 

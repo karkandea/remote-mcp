@@ -10,7 +10,7 @@ From a disposable checkout with Node.js 22+:
 bash scripts/ci.sh
 ```
 
-The script installs the lockfile, type-checks, tests, builds, and runs `npm audit`. It is a **manual or externally scheduled verification entry point**, not an automated CI service. There are currently no running webhook receivers or VPS background services supplied by this repository.
+The script installs the lockfile, type-checks, tests, builds, and runs `npm audit`. It is a **manual or externally scheduled verification entry point**, not an automated CI service. On 2026-10-31 it completed successfully on the owner's Ubuntu VPS against reviewed `main` (11/11 tests, 0 detected vulnerabilities). There are currently no running webhook receivers or VPS background services supplied by this repository.
 
 ## Proposed isolated automation
 
