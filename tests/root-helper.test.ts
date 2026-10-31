@@ -8,7 +8,8 @@ import { callRootHelper, startRootHelper } from '../src/root-helper.js';
 import { createProxyServer } from '../src/proxy-server.js';
 import { RelayChannel } from '../src/relay-channel.js';
 
-test('root-helper Unix socket manages start, poll, cancellation, without any network listener', async () => {
+test('root-helper Unix socket manages start, poll, cancellation, without any network listener',
+  { skip: process.platform !== 'linux' }, async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'remote-mcp-root-test-'));
   const socket = path.join(root, 'helper.sock');
   const helper = await startRootHelper(socket, { requireRoot: false }); // fake-root test only
@@ -36,7 +37,8 @@ test('root-helper Unix socket manages start, poll, cancellation, without any net
   } finally { await helper.close(); }
 });
 
-test('proxy root tools connect only to a configured Unix socket', async () => {
+test('proxy root tools connect only to a configured Unix socket',
+  { skip: process.platform !== 'linux' }, async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'remote-mcp-root-proxy-'));
   const socketPath = path.join(root, 'helper.sock');
   const helper = await startRootHelper(socketPath, { requireRoot: false });
