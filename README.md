@@ -2,7 +2,7 @@
 
 An owner-controlled Mac MCP server for authorized file operations, read-only Git inspection, and **preconfigured** process execution. Includes an experimental self-hosted relay that accepts outbound Mac connections, without pretending that directory restrictions constitute a shell sandbox.
 
-**Status:** MIT-licensed alpha. Local stdio MCP and a loopback-only relay have automated end-to-end tests with a real MCP client. The relay is **not deployed** on the owner's VPS; production OAuth, ChatGPT account linking, background macOS lifecycle, and SaaS are **not yet verified or shipped**.
+**Status:** MIT-licensed, single-owner alpha. The owner has deployed the loopback-only relay to a shared VPS, enabled an outbound background Mac agent, linked ChatGPT with owner-bound OAuth, and optionally activated the high-risk root socket executor. The new source is still on a **Draft PR**, not merged into `main` or recommended for public multi-tenant use. Local/relay integration tests run on Linux and macOS, but the ChatGPT host's discovery of the newest root tools has not yet been verified.
 
 ## Quick start (macOS, Node.js 22+)
 
@@ -75,7 +75,7 @@ Tests use synthetic temporary directories, not personal repositories. The MCP te
 ## Docs
 
 - [Architecture and future relay](docs/architecture.md)
-- [Independent VPS relay setup (not yet deployed)](docs/remote-relay.md)
+- [Independent VPS relay setup (single-owner live alpha)](docs/remote-relay.md)
 - [Security model](SECURITY.md)
 - [Roadmap and acceptance criteria](docs/roadmap.md)
 - [VPS-only CI policy](docs/vps-ci.md)
@@ -91,8 +91,8 @@ Tests use synthetic temporary directories, not personal repositories. The MCP te
 - The local prototype runs under the privileges of the user launching it. It is **not a filesystem or process sandbox**.
 - No interactive trusted owner-approval UI exists yet. Normal operation permits only preauthorized command profiles; the separate high-risk `mac_user_exec` and VPS root helper are *disabled by default* and documented as a draft in [Unrestricted Mode](docs/unrestricted-mode.md).
 - Symlink checks and atomic file replacement reduce common errors but cannot eliminate all filesystem race conditions.
-- A basic outbound relay, device shared-secret authentication, OAuth JWT validation, and request correlation now exist in code. Token rotation, owner UI, formal pairing, consent per tool, launchd, SaaS tenancy and authenticated ChatGPT production verification are still outstanding.
+- An outbound relay, device shared-secret authentication, OAuth JWT validation and request correlation are active for the owner. Token rotation, independent trusted per-action consent, formal pairing, SaaS tenancy and the latest unrestricted-tool discovery in ChatGPT still require review.
 - GitHub Actions are prohibited for this project. An independent, rootless Podman CI worker is **active on the owner's existing shared VPS**, checking new `main` commits approximately every 10 minutes. It runs as a separate non-sudo user with CPU, memory, and process caps. Public PRs are **not** executed on the shared host; without a fine-grained status token, results are available only in private VPS logs and are not shown as GitHub commit checks.
-- The new relay works in an automated loopback integration test, but has **not** been deployed to the shared VPS or linked to ChatGPT with real OAuth. macOS background-service setup and a full live ChatGPT-to-Mac demonstration remain outstanding.
+- The relay is live on the shared VPS, and the Mac user agent auto-starts with launchd. Owner-authenticated `device_status` calls work from ChatGPT. The optional root helper is also live over a private Unix socket. **Do not assume this makes remote root access safe**; see the explicit risk and kill-switch guidance in [Unrestricted Mode](docs/unrestricted-mode.md).
 
 Do not use this alpha on a privileged, company-managed, or production workstation.
