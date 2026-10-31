@@ -1,0 +1,15 @@
+{
+  "allowedRoots": ["/Users/YOUR_NAME/Projects/mcp-sandbox"],
+  "deniedNames": [".ssh", ".aws", ".gnupg", ".env", "id_rsa", "id_ed25519"],
+  "allowWrites": false,
+  "maxReadBytes": 262144,
+  "maxOutputBytes": 65536,
+  "commandProfiles": {
+    "sample-tests": {
+      "executable": "/usr/bin/true",
+      "args": [],
+      "cwd": "/Users/YOUR_NAME/Projects/mcp-sandbox",
+      "timeoutMs": 10000
+    }
+  }
+}
