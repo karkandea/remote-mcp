@@ -16,6 +16,13 @@ const MAX_UI_CHARACTERS = 35_000;
 type HttpVerb = 'GET' | 'POST' | 'DELETE';
 type AppiumEnvelope = { value?: unknown; sessionId?: unknown };
 
+/** launchd may omit the directory containing Node from PATH. Keep driver subprocesses on the same runtime. */
+export function appiumLaunchPath(nodeExecutable: string, inheritedPath: string | undefined): string {
+  const nodeDirectory = path.dirname(nodeExecutable);
+  const parts = (inheritedPath || '/usr/bin:/bin').split(':').filter(Boolean);
+  return [nodeDirectory, ...parts.filter(part => part !== nodeDirectory)].join(':');
+}
+
 /** A narrowly scoped Appium client on the Mac; the VPS cannot select endpoints or capabilities. */
 export class IphoneTools {
   private sessionId?: string;
@@ -101,7 +108,7 @@ export class IphoneTools {
       // Use the agent's known Node runtime; macOS launchd often lacks npm's bin directory in PATH.
       child = spawn(process.execPath, [this.config.appiumExecutable, '--address', '127.0.0.1', '--port', String(this.config.appiumPort)], {
         cwd: this.config.appiumCwd, shell: false, stdio: 'ignore',
-        env: { HOME: homedir(), PATH: process.env.PATH ?? '/usr/bin:/bin',
+        env: { HOME: homedir(), PATH: appiumLaunchPath(process.execPath, process.env.PATH),
           APPIUM_HOME: this.config.appiumHome, LANG: 'en_US.UTF-8',
           ...(process.env.DEVELOPER_DIR ? { DEVELOPER_DIR: process.env.DEVELOPER_DIR } : {}) },
       });

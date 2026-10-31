@@ -10,7 +10,14 @@ import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { configSchema, loadConfig } from '../src/config.js';
 import { DeviceState } from '../src/device.js';
+import { appiumLaunchPath } from '../src/iphone.js';
 import { createContext, createServer } from '../src/server.js';
+
+test('Appium launcher restores the actual Node directory when launchd omits it from PATH', () => {
+  assert.equal(appiumLaunchPath('/usr/local/bin/node', '/usr/bin:/bin'), '/usr/local/bin:/usr/bin:/bin');
+  assert.equal(appiumLaunchPath('/opt/homebrew/bin/node', '/opt/homebrew/bin:/usr/bin'),
+    '/opt/homebrew/bin:/usr/bin');
+});
 
 test('Appium tools are local opt-in, use fixed W3C operations and restrict app activation', async () => {
   const calls: Array<{ method: string; url: string; body?: unknown }> = [];
