@@ -24,6 +24,7 @@
 
 - [x] Register tools using official MCP TypeScript SDK v2.
 - [x] Real MCP client discovery, file read, disconnect, and deny test via in-memory transport.
+- [x] Real MCP stdio subprocess handshake, tool listing, and authorized file read in an automated test.
 - [ ] Verify actual stdio process lifecycle on the owner's Mac.
 - [ ] Verify Secure MCP Tunnel / ChatGPT developer-mode eligibility.
 - [ ] Set up private authenticated connection, no public unauthenticated endpoints.

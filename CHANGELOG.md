@@ -7,5 +7,6 @@
 - Read-only Git inspection and fixed command-profile execution.
 - Persisted disconnect, local CLI, audit metadata, test suite, security documentation.
 - VPS-only CI script and policy; GitHub Actions explicitly prohibited.
+- Cross-platform Node.js 22 test runner and real stdio subprocess integration coverage.
 
 Remote ChatGPT connectivity, a public repository, native Mac lifecycle, and SaaS remain unfinished.

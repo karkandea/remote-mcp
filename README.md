@@ -66,7 +66,7 @@ npm test
 npm run build
 ```
 
-Tests use synthetic temporary directories, not personal repositories. The current in-memory MCP test covers discovery, a real disk read, and post-disconnect denial. Process tests execute a fixed Node test command.
+Tests use synthetic temporary directories, not personal repositories. The MCP tests cover in-memory tool discovery, real disk reads, post-disconnect denial, and a separate real stdio subprocess handshake. Process tests execute a fixed Node test command.
 
 ## Docs
 
