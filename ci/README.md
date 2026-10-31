@@ -4,12 +4,12 @@
 
 This is a **main-branch-only** CI worker: a systemd user timer polls the public GitHub branch every ~10 minutes. For each new immutable SHA, it fetches a fresh checkout, verifies the SHA, and runs `scripts/ci.sh` inside a short-lived rootless Podman container. Its GitHub API calls and optional status credential remain outside the job sandbox.
 
-The implementation is checked into this repository. The owner approved using the existing shared Ubuntu VPS for **trusted `main` only**, subject to a non-sudo CI user, rootless Podman isolation, resource-limit smoke tests, and service impact review. **Do not enable public PR execution on the shared host.** A separate CI VPS remains preferable for hostile contributions.
+The implementation is checked into this repository and **deployed on the owner's existing shared Ubuntu 22.04 VPS**. A real systemd one-shot run succeeded on 2026-10-31 (17/17 tests, typecheck, build, `npm audit` reporting 0 vulnerabilities), and the user timer is enabled and active. This host is approved for **trusted `main` only**. **Do not enable public PR execution on the shared host.** A separate CI VPS remains preferable for hostile contributions.
 
 ## Host requirements
 
-- Ubuntu VPS/VM with a dedicated unprivileged `ci-runner` account. The approved shared Ubuntu 22.04 host had ~2.9 GiB available memory and ~8.2 GiB free disk at assessment. On this host, `user-1005.slice` is capped at **1 CPU, 1.5 GiB RAM, and 192 tasks**; Podman additionally caps each job at **1 GiB RAM, 96 processes**, and only one job runs at a time. Stop if free resources fall below operational safety thresholds.
-- Git, Node.js 20+ for the host poller, rootless Podman, `uidmap`, `slirp4netns`, and `flock`. A working cgroup v2 user delegation is required for the memory, CPU, and process limits.
+- Ubuntu VPS/VM with a dedicated unprivileged `ci-runner` account. The approved shared Ubuntu 22.04 host had ~2.9 GiB available memory and ~8.2 GiB free disk at initial assessment; by deployment, disk usage was approximately **88%** (~7.7 GiB free). On this host, `user-1005.slice` is capped at **1 CPU, 1.5 GiB RAM, and 192 tasks**; Podman additionally caps each job at **1 GiB RAM, 96 processes**, and only one job runs at a time. Monitor disk headroom and stop if resources fall below operational safety thresholds.
+- Git, Node.js 20+ for the host poller, rootless Podman, `uidmap`, `slirp4netns`, and `flock`. Cgroup v2 limits must be verified on the actual host. Ubuntu 22.04 delegates memory/pids to the rootless container but, on this VPS, CPU is enforced at the system-level CI user slice.
 - The CI user must have no read access to production data, application secrets, database credentials, Docker socket, or privileged mounts. Inbound access only for operator SSH; no HTTP inbound port required.
 - Egress only as needed for GitHub, container image registry, npm registry, and npm audit. Tighten the VPS firewall and hosting-provider controls; treat all CI job output as untrusted.
 - A **pinned digest** for the official `docker.io/library/node` Node 22 image. Moving image tags are intentionally rejected by the runner.
@@ -34,7 +34,7 @@ Logs are stored in the private `runs/` directory under the state directory, reta
 
 Create a fine-grained token restricted to this repository with only **Commit statuses: read/write** (plus mandatory repository metadata read). Save the token in a 0600 owner-only file outside the repository, then set `REMOTE_MCP_CI_TOKEN_FILE` to its absolute path in the service environment file. The host runner posts `pending`, `success`, or `failure` to status context `remote-mcp/vps-ci`. The token is never mounted into the test container. Do not set a general-purpose repository-write token.
 
-Without this token, local CI still works; GitHub cannot display its result. Do not require the status in branch protection until the dedicated runner and status publishing have been proven reliable.
+**Deployment status:** no token has been configured. VPS CI runs and records private results, but GitHub does not display its status. Do not require this status in branch protection until scoped status publishing has been proven reliable.
 
 ## PR policy
 

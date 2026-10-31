@@ -7,7 +7,8 @@
 - [x] Create public `karkandea/remote-mcp` repository and publish source.
 - [x] MIT open-source license approved by owner and added.
 - [x] Implement and test a main-only independent VPS poller with rootless container isolation options; no GitHub Actions.
-- [ ] Verify rootless container limits on the existing VPS and activate an isolated main-only systemd timer and status reporting.
+- [x] Verify rootless Podman limits and host-level CPU/memory/task caps on the existing shared VPS; complete a real main-only CI run and activate the systemd timer.
+- [ ] Publish GitHub commit statuses using a fine-grained, repository-limited status token; current results are local to the VPS.
 - [ ] Design and verify isolated, abuse-resistant public PR checks; main-only CI is not PR verification.
 - [x] Protect `main` against force-push and deletion, with linear commit history.
 - [ ] Add required CI status after the independently hosted VPS runner and GitHub status reporting are operational.

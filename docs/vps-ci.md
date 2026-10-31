@@ -9,7 +9,7 @@
 - `ci/systemd`: user-level oneshot service and a ~10-minute timer; no public webhook listener and no inbound CI port.
 - `ci/runner.test.mjs`: safety regression tests for SHA/input validation, digest pinning, and container confinement flags.
 
-The owner approved deployment of **main-only CI** onto the existing shared Ubuntu VPS, with a separate unprivileged user and strict resource caps. Public PR execution remains forbidden on that host. The previous checkpoint verified only a manual run; live container and timer status must be confirmed independently.
+The owner approved and completed deployment of **main-only CI** on the existing shared Ubuntu VPS, using an unprivileged `ci-runner` account, rootless Podman, and CPU/memory/process caps. A real isolated systemd run passed all 17 tests, typecheck, build, and npm audit on 2026-10-31; its timer is enabled and active. Public PR execution remains forbidden on that host. GitHub status posting is not configured, so results are only visible in private VPS logs.
 
 See [ci/README.md](../ci/README.md) for the deployment checklist and threat boundaries.
 
