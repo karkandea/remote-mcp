@@ -20,12 +20,15 @@
     "doctor": "node dist/cli.js doctor"
   },
   "dependencies": {
+    "@modelcontextprotocol/client": "^2.4.0",
     "@modelcontextprotocol/server": "^2.0.0",
+    "jose": "^6.1.0",
+    "ws": "^8.18.3",
     "zod": "^4.0.0"
   },
   "devDependencies": {
-    "@modelcontextprotocol/client": "^2.4.0",
     "@types/node": "^24.0.0",
+    "@types/ws": "^8.18.1",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0"
   }
