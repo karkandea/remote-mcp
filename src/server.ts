@@ -7,6 +7,8 @@ import { DeviceState } from './device.js';
 import { AgentError, toResult } from './errors.js';
 import { FileTools } from './files.js';
 import { PathPolicy } from './policy.js';
+import { ProcessTools } from './processes.js';
+import { SystemTools } from './system.js';
 
 export type AgentContext = {
   config: AgentConfig;
@@ -14,11 +16,14 @@ export type AgentContext = {
   device: DeviceState;
   files: FileTools;
   commands: CommandTools;
+  processes: ProcessTools;
+  system: SystemTools;
 };
 
 export async function createContext(config: AgentConfig, device = new DeviceState()): Promise<AgentContext> {
   const policy = await PathPolicy.create(config);
-  return { config, policy, device, files: new FileTools(policy, config), commands: new CommandTools(policy, config) };
+  return { config, policy, device, files: new FileTools(policy, config), commands: new CommandTools(policy, config),
+    processes: new ProcessTools(config), system: new SystemTools(config) };
 }
 
 export function createServer(ctx: AgentContext): McpServer {
@@ -55,6 +60,27 @@ export function createServer(ctx: AgentContext): McpServer {
     wrap('fs_apply_patch', ({ path, expectedText, replacementText, expectedSha256 }: {
       path: string; expectedText: string; replacementText: string; expectedSha256?: string;
     }) => ctx.files.applyPatch(path, expectedText, replacementText, expectedSha256)));
+  server.registerTool('process_list', { description: 'List up to 100 processes owned by the Mac user; no command-line arguments',
+    inputSchema: z.object({ filter: z.string().min(1).max(100).optional() }) },
+    wrap('process_list', ({ filter }: { filter?: string }) => ctx.processes.list(filter)));
+  server.registerTool('process_info', { description: 'Inspect a current-user process by PID',
+    inputSchema: z.object({ pid: z.number().int().positive() }) },
+    wrap('process_info', ({ pid }: { pid: number }) => ctx.processes.info(pid)));
+  server.registerTool('process_stop', { description: 'Request SIGTERM for an explicitly allowlisted user process; requires matching start time from process_list',
+    inputSchema: z.object({ pid: z.number().int().positive(), expectedStartedAt: z.string().min(10).max(100) }) },
+    wrap('process_stop', ({ pid, expectedStartedAt }: { pid: number; expectedStartedAt: string }) =>
+      ctx.processes.stop(pid, expectedStartedAt)));
+  server.registerTool('system_status', { description: 'Read bounded macOS uptime, memory, CPU and approved-root disk metrics',
+    inputSchema: z.object({}) }, wrap('system_status', () => ctx.system.status()));
+  server.registerTool('system_app_open', { description: 'Open an exact locally allowlisted macOS application bundle, without shell commands',
+    inputSchema: z.object({ profile: z.string() }) },
+    wrap('system_app_open', ({ profile }: { profile: string }) => ctx.system.openApp(profile)));
+  server.registerTool('system_service_status', { description: 'Inspect a locally allowlisted current-user launchd service',
+    inputSchema: z.object({ label: z.string() }) },
+    wrap('system_service_status', ({ label }: { label: string }) => ctx.system.serviceStatus(label)));
+  server.registerTool('system_service_restart', { description: 'Restart a locally allowlisted current-user launchd service (never the MCP agent)',
+    inputSchema: z.object({ label: z.string() }) },
+    wrap('system_service_restart', ({ label }: { label: string }) => ctx.system.serviceRestart(label)));
   for (const action of ['status', 'diff', 'log'] as const) {
     server.registerTool(`git_${action}`, { description: `Run a read-only git ${action} in an approved directory`,
       inputSchema: z.object({ directory: z.string() }) },
@@ -74,7 +100,10 @@ export function createServer(ctx: AgentContext): McpServer {
   server.registerTool('device_status', { description: 'Show connection state and configured authorized roots',
     inputSchema: z.object({}) }, wrap('device_status', async () => ({ ...(await ctx.device.status() as object),
       allowedRoots: ctx.policy.listRoots(), writesEnabled: ctx.config.allowWrites,
-      commandProfiles: Object.keys(ctx.config.commandProfiles) }), true));
+      commandProfiles: Object.keys(ctx.config.commandProfiles),
+      processStopAllowlist: ctx.config.processStopAllowlist,
+      appLaunchProfiles: Object.keys(ctx.config.appLaunchProfiles),
+      serviceRestartAllowlist: ctx.config.serviceRestartAllowlist }), true));
   server.registerTool('device_disconnect', { description: 'Persistently revoke agent tool execution until owner locally resumes',
     inputSchema: z.object({}) }, wrap('device_disconnect', async () => {
       await ctx.device.disconnect();

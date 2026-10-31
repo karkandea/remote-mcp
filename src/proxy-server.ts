@@ -21,6 +21,26 @@ export function createProxyServer(channel: RelayChannel): McpServer {
   server.registerTool('fs_apply_patch', { ...auth, description: 'Replace one expected text occurrence (requires locally enabled writes)',
     annotations: { destructiveHint: true }, inputSchema: z.object({ path: z.string(), expectedText: z.string().min(1), replacementText: z.string(), expectedSha256: z.string().length(64).optional() }) },
     args => channel.call('fs_apply_patch', args));
+  server.registerTool('process_list', { ...auth, description: 'List up to 100 current-user Mac processes without command-line arguments',
+    annotations: { readOnlyHint: true }, inputSchema: z.object({ filter: z.string().min(1).max(100).optional() }) },
+    args => channel.call('process_list', args));
+  server.registerTool('process_info', { ...auth, description: 'Inspect a current-user Mac process by PID',
+    annotations: { readOnlyHint: true }, inputSchema: z.object({ pid: z.number().int().positive() }) },
+    args => channel.call('process_info', args));
+  server.registerTool('process_stop', { ...auth, description: 'Gracefully stop a locally allowlisted user process with start-time confirmation',
+    annotations: { destructiveHint: true }, inputSchema: z.object({ pid: z.number().int().positive(), expectedStartedAt: z.string().min(10).max(100) }) },
+    args => channel.call('process_stop', args));
+  server.registerTool('system_status', { ...auth, description: 'Inspect Mac uptime, memory, CPU load and approved-root disk capacity',
+    annotations: { readOnlyHint: true }, inputSchema: z.object({}) },
+    args => channel.call('system_status', args));
+  server.registerTool('system_app_open', { ...auth, description: 'Open a locally allowlisted macOS app; does not expose a shell',
+    inputSchema: z.object({ profile: z.string() }) }, args => channel.call('system_app_open', args));
+  server.registerTool('system_service_status', { ...auth, description: 'Inspect an allowlisted current-user launchd service',
+    annotations: { readOnlyHint: true }, inputSchema: z.object({ label: z.string() }) },
+    args => channel.call('system_service_status', args));
+  server.registerTool('system_service_restart', { ...auth, description: 'Restart an allowlisted user launchd service (agent itself excluded)',
+    annotations: { destructiveHint: true }, inputSchema: z.object({ label: z.string() }) },
+    args => channel.call('system_service_restart', args));
   for (const action of ['status', 'diff', 'log'] as const) {
     server.registerTool(`git_${action}`, { ...auth, description: `Read-only git ${action} in an approved Mac directory`,
       annotations: { readOnlyHint: true }, inputSchema: z.object({ directory: z.string() }) },

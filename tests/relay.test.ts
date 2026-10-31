@@ -77,7 +77,7 @@ test('OAuth gate blocks anonymous callers; MCP request crosses VPS channel and r
       { authProvider: { token: async () => 'authorized-test-token' } });
     await client.connect(transport);
     const listed = await client.listTools();
-    assert.equal(listed.tools.length, 14);
+    assert.equal(listed.tools.length, 21);
     const offline = await client.callTool({ name: 'fs_read', arguments: { path: file } });
     assert.equal(offline.isError, true);
     assert.match(JSON.stringify(offline.content), /offline/);

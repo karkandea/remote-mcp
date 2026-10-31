@@ -1,4 +1,4 @@
-# Independent VPS relay (alpha, not deployed)
+# Independent VPS relay (alpha)
 
 This is an **alternative to OpenAI Secure MCP Tunnel**, not a wrapper around OpenAI API usage. ChatGPT connects to a public HTTPS `/mcp` resource server. The Mac agent initiates an outbound authenticated `wss://` connection to the same relay. The VPS brokers individual tool calls and does not execute filesystem/terminal tools.
 
@@ -15,12 +15,12 @@ flowchart TD
 ## Current implementation
 
 - Gateway: `node dist/cli.js relay` binds **only** to `127.0.0.1` or `::1`; no public listener. The external TLS terminator, DNS and OAuth provider must be provided separately.
-- The proposed always-on service is [`deploy/systemd/remote-mcp-relay.service`](../deploy/systemd/remote-mcp-relay.service). It uses a dedicated non-root account, restarts on failures, caps memory/CPU/processes and is independent of `ci-runner`. It is **a reviewed candidate, not installed or enabled on production**.
-- Proposed isolated Nginx vhosts: [`deploy/nginx/mcp.dualangka.com.bootstrap.conf.example`](../deploy/nginx/mcp.dualangka.com.bootstrap.conf.example) for HTTP-01 certificate bootstrap/renewal, and [`deploy/nginx/mcp.dualangka.com.conf.example`](../deploy/nginx/mcp.dualangka.com.conf.example) for HTTPS/WSS. Do not enable or reload either without review. The HTTPS certificate paths are placeholders until issuance.
+- The example always-on service is [`deploy/systemd/remote-mcp-relay.service`](../deploy/systemd/remote-mcp-relay.service). It uses a dedicated non-root account, restarts on failures, caps memory/CPU/processes and is independent of `ci-runner`. Review and adapt it before deployment.
+- A proposed isolated Nginx vhost is [`deploy/nginx/mcp.dualangka.com.conf.example`](../deploy/nginx/mcp.dualangka.com.conf.example). Its certificate paths are placeholders; do not enable or reload it before valid DNS, certificates and OAuth.
 - HTTP: `POST /mcp` uses the official MCP Streamable HTTP SDK. Requests require `Authorization: Bearer` with an access token whose JWT signature, `iss`, `aud`, `exp`, owner `sub`, and `mcp:tools` scope pass verification. A JWKS URL on the identity provider's origin is required. Failed checks return `401` and an RFC 9728 resource metadata challenge.
 - Discovery: `GET /.well-known/oauth-protected-resource` advertises the resource, its OAuth issuer and scope. **The issuer must independently support authorization-code + PKCE S256 and ChatGPT-compatible CIMD, DCR, or predefined client configuration.** This relay intentionally does not implement its own authorization server.
 - Mac: `node dist/cli.js agent` connects outbound using a 32+ byte random `RELAY_DEVICE_TOKEN`. Only one Mac connection is accepted at a time; requests carry random correlated IDs and enforce frame size, concurrency and timeout limits.
-- Local policy: the 14 MCP tools retain the Mac's allowed roots, denylist, write-disabled default, exact terminal profiles and persistent revocation. In particular, `agent` does **not** open a Mac listening port.
+- Local policy: all Mac operations retain the Mac's allowed roots, denylist, write-disabled default, exact terminal profiles and persistent revocation. In particular, `agent` does **not** open a Mac listening port.
 - No GitHub Actions. The existing independently hosted VPS CI remains main-only and isolated from production.
 
 ## Prerequisites before any live deployment
@@ -31,15 +31,33 @@ flowchart TD
 4. Review Nginx reverse proxy paths `/mcp`, `/.well-known/oauth-protected-resource`, `/agent/ws`, and optionally `/healthz`. Forward the original `Authorization` header on both `/mcp` and `/agent/ws`, and forward WebSocket `Upgrade`/`Connection` headers. Require public HTTPS; do not disclose sensitive headers in logs. Rate-limit and cap request bodies. Never publish the loopback Node listener directly.
 5. Configure the Mac's allowed roots to a small, non-sensitive test directory; leave `allowWrites: false` and `commandProfiles: {}` until explicitly approved. Run the Mac agent as the standard non-admin account.
 
-## Review-gated HTTPS certificate bootstrap
+## Optional file edits and system controls
 
-The shared VPS already runs Nginx for other sites. The new `mcp.dualangka.com` certificate does not exist yet. Do **not** use `certbot --nginx`, stop Nginx, or reload Nginx automatically.
+These capabilities are installed but **disabled for destructive actions by default**. The Mac owner enables them by editing the local `~/.config/remote-mcp/config.json` (mode `0600`). A remote caller cannot expand these permissions.
 
-1. After review, install the HTTP-only candidate at `deploy/nginx/mcp.dualangka.com.bootstrap.conf.example` for **this exact hostname** and create `/var/www/remote-mcp-acme` (root-owned, directory mode 0755). Keep `/mcp` and `/agent/ws` inaccessible over HTTP.
-2. Run `sudo nginx -t` and **stop before reload** for explicit approval. A successful syntax test alone does not authorize a reload.
-3. After bootstrap reload approval, verify a harmless challenge file is served under `http://mcp.dualangka.com/.well-known/acme-challenge/`. Obtain a certificate with `certbot certonly --webroot -w /var/www/remote-mcp-acme -d mcp.dualangka.com`; this does not need Certbot's Nginx auto-editor. Confirm automatic renewal is configured and the HTTP challenge vhost remains active.
-4. Only when the certificate, OAuth issuer/JWKS and owner restrictions are verified, install the separate HTTPS/WSS Nginx candidate. Run `sudo nginx -t`, show the resulting diff and **stop before this second reload** for review. Do not run either reload without approval.
-5. Test an unauthenticated `POST /mcp` returns `401` with `WWW-Authenticate`, while OAuth protected-resource metadata is readable over HTTPS. Exercise the real login flow and a non-sensitive Mac-only test directory; keep writes disabled by default.
+- `fs_apply_patch`: set `allowWrites: true` to replace exactly one expected text occurrence **only inside allowedRoots**. Supply `expectedSha256` from a fresh `fs_read` to reject stale edits. No arbitrary file creation, deletion, or traversal outside allowed roots.
+- `process_list` and `process_info`: inspect current-user processes without command-line arguments, capped at 100 entries per listing.
+- `process_stop`: send graceful SIGTERM to a current-user process only if its exact executable **basename** is in `processStopAllowlist`; PID and `expectedStartedAt` must match the latest observation. Cannot stop the agent itself or protected low PIDs. No SIGKILL.
+- `system_status`: inspect OS uptime, CPU load, memory and disk availability for the first approved root.
+- `system_app_open`: launch an exact .app bundle under a locally configured alias in `appLaunchProfiles`. No shell and no arbitrary command arguments.
+- `system_service_status` / `system_service_restart`: inspect or restart an explicitly allowlisted **current-user** launchd label. Never manages system/root daemons, and the MCP agent cannot restart itself.
+
+Example of narrow opt-ins (substitute only local, trusted target names):
+
+```json
+{
+  "allowedRoots": ["/Users/YOUR_NAME/Projects/mcp-sandbox"],
+  "allowWrites": true,
+  "processStopAllowlist": ["sleep"],
+  "appLaunchProfiles": {
+    "textedit": "/System/Applications/TextEdit.app"
+  },
+  "serviceRestartAllowlist": [],
+  "commandProfiles": {}
+}
+```
+
+Avoid allowing critical apps or broad process names like `node` without reviewing every matching user process. Changes to the Mac configuration require an agent restart. This is intentionally **not unrestricted Desktop Commander parity**: shell access, global filesystem access, arbitrary system shutdown/reboot, and privileged service control are excluded.
 
 ## VPS environment variables
 

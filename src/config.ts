@@ -15,6 +15,12 @@ export const configSchema = z.object({
   allowedRoots: z.array(z.string()).default([]),
   deniedNames: z.array(z.string()).default([]),
   allowWrites: z.boolean().default(false),
+  // A remote caller can only stop processes explicitly opted in by the Mac owner.
+  processStopAllowlist: z.array(z.string().regex(/^[A-Za-z0-9._-]{1,100}$/)).max(50).default([]),
+  // Profiles map a public alias to an exact local .app bundle path.
+  appLaunchProfiles: z.record(z.string(), z.string()).default({}),
+  // Only user-owned launchd labels explicitly named here may be restarted.
+  serviceRestartAllowlist: z.array(z.string().regex(/^[A-Za-z0-9._-]{1,120}$/)).max(50).default([]),
   maxReadBytes: z.number().int().min(1).max(10_485_760).default(262_144),
   maxOutputBytes: z.number().int().min(1024).max(1_048_576).default(65_536),
   commandProfiles: z.record(z.string(), commandProfileSchema).default({}),
@@ -58,6 +64,11 @@ export async function loadConfig(filePath = configPath()): Promise<AgentConfig> 
   for (const [name, profile] of Object.entries(result.data.commandProfiles)) {
     if (!path.isAbsolute(profile.executable) || !path.isAbsolute(profile.cwd)) {
       throw new AgentError('INVALID_CONFIG', `Command profile ${name} needs absolute executable and cwd`);
+    }
+  }
+  for (const [name, appPath] of Object.entries(result.data.appLaunchProfiles)) {
+    if (!/^[A-Za-z0-9._-]{1,60}$/.test(name) || !path.isAbsolute(appPath) || !appPath.endsWith('.app')) {
+      throw new AgentError('INVALID_CONFIG', `Application profile ${name} needs an absolute .app bundle path`);
     }
   }
   return result.data;
