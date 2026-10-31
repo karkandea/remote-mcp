@@ -46,7 +46,7 @@ export function buildPodmanArgs({ checkout, image, containerName }) {
     '--tmpfs=/work:rw,exec,nosuid,nodev,size=512m,mode=1777',
     '--env=CI=true', '--env=HOME=/tmp', '--env=NPM_CONFIG_CACHE=/tmp/npm-cache',
     '--volume', `${checkout}:/input:ro`, '--workdir=/work', image,
-    '/bin/bash', '-ec', 'cp -a /input/. /work/ && cd /work && bash scripts/ci.sh',
+    '/bin/bash', '-ec', 'cp -R --no-preserve=mode,ownership,timestamps /input/. /work/ && cd /work && bash scripts/ci.sh',
   ];
 }
 

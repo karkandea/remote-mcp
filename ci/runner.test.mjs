@@ -28,4 +28,5 @@ test('runner container has no privileged mounts and enforces resource caps', () 
   assert.ok(!joined.includes('--network=host'));
   assert.ok(!joined.includes('--cpus='), 'CPU quota is enforced by the dedicated host user slice');
   assert.ok(!joined.includes('GITHUB_TOKEN'));
+  assert.ok(joined.includes('cp -R --no-preserve=mode,ownership,timestamps'));
 });
