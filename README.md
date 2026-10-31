@@ -16,7 +16,7 @@ node dist/cli.js init
 node dist/cli.js doctor
 ```
 
-The GitHub URL is a **planned destination** until the repository is published. When using a local source archive, extract it and start at `npm ci`.
+Public source: [karkandea/remote-mcp](https://github.com/karkandea/remote-mcp). When using a local source archive, extract it and start at `npm ci`.
 
 Edit `~/.config/remote-mcp/config.json` with a small test directory first. See [`config.example.json`](config.example.json). The default configuration authorizes **no directory**, **no writes**, and **no commands**.
 
@@ -38,7 +38,7 @@ Local lifecycle commands:
 | `stop` | Persistently reject new tools; separately stop the MCP host process |
 | `resume` | Locally re-enable access after a stop/disconnect |
 
-The `stop` command does not independently kill a host-owned stdio process; the host still controls its lifecycle. A launchd service, menu-bar UI, and automatic reconnection have not been implemented yet.
+The `stop` command does not independently kill a host-owned stdio process; the host still controls its lifecycle. `doctor` reports **localAccessEnabled**, not whether ChatGPT or a remote client is connected. A launchd service, menu-bar UI, and automatic reconnection have not been implemented yet.
 
 ## Capabilities
 
@@ -74,6 +74,7 @@ Tests use synthetic temporary directories, not personal repositories. The MCP te
 - [Security model](SECURITY.md)
 - [Roadmap and acceptance criteria](docs/roadmap.md)
 - [VPS-only CI policy](docs/vps-ci.md)
+- [Mac verification checkpoint](docs/verification-2026-10-31.md)
 - [Contributing](CONTRIBUTING.md)
 - [Changelog](CHANGELOG.md)
 - [MIT License](LICENSE)

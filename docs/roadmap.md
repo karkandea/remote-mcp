@@ -4,7 +4,7 @@
 
 - [x] Local source, GitHub-ready docs/templates, and a VPS CI verification script.
 - [x] Dependency lockfile and local build/test commands.
-- [ ] Create public `karkandea/remote-mcp` repository and push first reviewed commit.
+- [x] Create public `karkandea/remote-mcp` repository and publish source.
 - [x] MIT open-source license approved by owner and added.
 - [ ] Provision and verify isolated VPS CI with webhook signature verification. GitHub Actions are prohibited.
 - [ ] Configure branch protection / repository rules.
@@ -17,7 +17,7 @@
 - [x] Persisted local device disconnect.
 - [x] Basic policy, errors, audit, and initial regression tests.
 - [ ] Threat-model review, additional path-race hardening and sandbox strategy.
-- [ ] macOS-specific test execution under a non-root user.
+- [x] macOS 26.6.2 (Apple Silicon) test execution under non-root user `arkan`, 11/11 passed.
 - [ ] Robust launchd lifecycle and process cleanup under sleep/restart.
 
 ## M2 — Personal remote ChatGPT integration
@@ -25,7 +25,7 @@
 - [x] Register tools using official MCP TypeScript SDK v2.
 - [x] Real MCP client discovery, file read, disconnect, and deny test via in-memory transport.
 - [x] Real MCP stdio subprocess handshake, tool listing, and authorized file read in an automated test.
-- [ ] Verify actual stdio process lifecycle on the owner's Mac.
+- [x] Verify a real stdio subprocess handshake and authorized file read on the owner's Mac.
 - [ ] Verify Secure MCP Tunnel / ChatGPT developer-mode eligibility.
 - [ ] Set up private authenticated connection, no public unauthenticated endpoints.
 - [ ] Execute acceptance tests A–F with synthetic Mac files and real authorization.

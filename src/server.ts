@@ -75,7 +75,7 @@ export function createServer(ctx: AgentContext): McpServer {
     inputSchema: z.object({}) }, wrap('device_disconnect', async () => {
       await ctx.device.disconnect();
       ctx.commands.cancelAll();
-      return { connected: false, resume: 'remote-mcp resume (local-only)' };
+      return { localAccessEnabled: false, resume: 'remote-mcp resume (local-only)' };
     }));
   return server;
 }

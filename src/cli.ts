@@ -19,7 +19,7 @@ async function main(): Promise<void> {
     case 'doctor': {
       const report: Record<string, unknown> = {
         platform: process.platform, node: process.version, configFile: configPath(),
-        configExists: existsSync(configPath()), connected: await device.connected(),
+        configExists: existsSync(configPath()), localAccessEnabled: await device.connected(),
       };
       if (report.configExists) {
         try {

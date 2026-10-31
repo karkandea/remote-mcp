@@ -27,7 +27,7 @@ export class DeviceState {
   }
   async status(): Promise<unknown> {
     return { deviceName: hostname(), platform: platform(), architecture: arch(), osRelease: release(),
-      nodeVersion: process.version, connected: await this.connected() };
+      nodeVersion: process.version, localAccessEnabled: await this.connected() };
   }
   async audit(tool: string, outcome: 'ok' | 'error', code?: string): Promise<void> {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
