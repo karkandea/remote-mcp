@@ -99,6 +99,15 @@ test('OAuth gate blocks anonymous callers; MCP request crosses VPS channel and r
       path: file, expectedText: 'actual', replacementText: 'changed',
     } });
     assert.equal(writes.isError, true);
+    abort.abort();
+    await agentPromise;
+    for (let attempt = 0; attempt < 100 && relay.channel.connected; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.equal(relay.channel.connected, false);
+    const afterDisconnect = await client.callTool({ name: 'fs_read', arguments: { path: file } });
+    assert.equal(afterDisconnect.isError, true);
+    assert.match(JSON.stringify(afterDisconnect.content), /offline/);
   } finally {
     abort.abort();
     if (agentPromise) await agentPromise;

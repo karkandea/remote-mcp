@@ -1,0 +1,48 @@
+# TEMPLATE ONLY. Requires DNS + valid certificate + approved OAuth configuration.
+# Do not symlink into sites-enabled or reload Nginx until reviewed.
+server {
+    listen 443 ssl;
+    server_name mcp.dualangka.com;
+
+    # Paths are illustrative; obtain and verify a real certificate first.
+    ssl_certificate /etc/letsencrypt/live/mcp.dualangka.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/mcp.dualangka.com/privkey.pem;
+
+    server_tokens off;
+    client_max_body_size 1m;
+    add_header X-Content-Type-Options nosniff always;
+
+    # ChatGPT -> VPS. The relay verifies the OAuth bearer JWT on every POST.
+    location = /mcp {
+        limit_except POST { deny all; }
+        proxy_pass http://127.0.0.1:3417;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 45s;
+    }
+
+    # OAuth discovery must be public so ChatGPT can discover the issuer.
+    location = /.well-known/oauth-protected-resource {
+        limit_except GET { deny all; }
+        proxy_pass http://127.0.0.1:3417;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    # Mac -> VPS. Requires a separate high-entropy device bearer secret.
+    location = /agent/ws {
+        proxy_pass http://127.0.0.1:3417;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header Authorization $http_authorization;
+        proxy_read_timeout 90s;
+        proxy_send_timeout 90s;
+    }
+
+    # Keep health checks local; do not publish internal service metrics.
+    location / { return 404; }
+}

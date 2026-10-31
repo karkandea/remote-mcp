@@ -1,0 +1,35 @@
+[Unit]
+Description=Remote MCP always-on loopback gateway (single-owner alpha)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=remote-mcp
+Group=remote-mcp
+WorkingDirectory=/opt/remote-mcp
+EnvironmentFile=/etc/remote-mcp/relay.env
+ExecStart=/usr/bin/node /opt/remote-mcp/dist/cli.js relay
+Restart=always
+RestartSec=5s
+TimeoutStopSec=15s
+UMask=0077
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+MemoryMax=256M
+TasksMax=64
+CPUQuota=50%
+LimitNOFILE=1024
+
+[Install]
+WantedBy=multi-user.target
