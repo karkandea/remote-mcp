@@ -1,0 +1,30 @@
+# BOOTSTRAP ONLY: review before enabling. No HTTPS server is enabled here.
+# Allow Let's Encrypt HTTP-01 challenges before the first certificate exists.
+# Keep this port-80 vhost after HTTPS activation so certbot webroot renewal works.
+#
+# Preparation (after review):
+#   sudo install -d -o root -g root -m 0755 /var/www/remote-mcp-acme
+#   sudo cp mcp.dualangka.com.bootstrap.conf.example /etc/nginx/sites-available/mcp.dualangka.com-bootstrap
+#   sudo ln -s /etc/nginx/sites-available/mcp.dualangka.com-bootstrap /etc/nginx/sites-enabled/mcp.dualangka.com-bootstrap
+#   sudo nginx -t
+# STOP HERE for explicit approval before any nginx reload.
+#
+# Certificate issuance after bootstrap reload:
+#   sudo certbot certonly --webroot -w /var/www/remote-mcp-acme -d mcp.dualangka.com
+# Verify the cert exists, then review and enable the separate HTTPS example.
+
+server {
+    listen 80;
+    server_name mcp.dualangka.com;
+
+    server_tokens off;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/remote-mcp-acme;
+        default_type text/plain;
+        limit_except GET { deny all; }
+    }
+
+    # Do not expose the MCP service or a redirect over plain HTTP.
+    location / { return 404; }
+}
