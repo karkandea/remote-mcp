@@ -1,6 +1,6 @@
 {
   "allowedRoots": ["/Users/YOUR_NAME/Projects/mcp-sandbox"],
-  "deniedNames": [".ssh", ".aws", ".gnupg", ".env", "id_rsa", "id_ed25519"],
+  "deniedNames": [".internal-secrets"],
   "allowWrites": false,
   "maxReadBytes": 262144,
   "maxOutputBytes": 65536,

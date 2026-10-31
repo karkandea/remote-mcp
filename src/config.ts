@@ -13,7 +13,7 @@ const commandProfileSchema = z.object({
 
 export const configSchema = z.object({
   allowedRoots: z.array(z.string()).default([]),
-  deniedNames: z.array(z.string()).default(['.ssh', '.aws', '.gnupg', '.env', 'id_rsa', 'id_ed25519']),
+  deniedNames: z.array(z.string()).default([]),
   allowWrites: z.boolean().default(false),
   maxReadBytes: z.number().int().min(1).max(10_485_760).default(262_144),
   maxOutputBytes: z.number().int().min(1024).max(1_048_576).default(65_536),

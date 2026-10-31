@@ -28,8 +28,12 @@ export function createServer(ctx: AgentContext): McpServer {
       try {
         if (!allowDisconnected) await ctx.device.assertConnected();
         const data = await action(args);
+        const response = JSON.stringify({ ok: true, data });
+        if (Buffer.byteLength(response) > ctx.config.maxOutputBytes) {
+          throw new AgentError('OUTPUT_TOO_LARGE', 'Response exceeds configured maxOutputBytes');
+        }
         await ctx.device.audit(name, 'ok').catch(() => {});
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ ok: true, data }) }] };
+        return { content: [{ type: 'text' as const, text: response }] };
       } catch (error) {
         const safe = toResult(error);
         await ctx.device.audit(name, 'error', safe.code).catch(() => {});

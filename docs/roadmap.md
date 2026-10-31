@@ -7,7 +7,8 @@
 - [x] Create public `karkandea/remote-mcp` repository and publish source.
 - [x] MIT open-source license approved by owner and added.
 - [ ] Provision and verify isolated VPS CI with webhook signature verification. GitHub Actions are prohibited.
-- [ ] Configure branch protection / repository rules.
+- [x] Protect `main` against force-push and deletion, with linear commit history.
+- [ ] Add required CI status after an independently hosted, isolated VPS runner is operational.
 
 ## M1 — Local execution agent
 

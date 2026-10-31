@@ -20,6 +20,8 @@ Public source: [karkandea/remote-mcp](https://github.com/karkandea/remote-mcp). 
 
 Edit `~/.config/remote-mcp/config.json` with a small test directory first. See [`config.example.json`](config.example.json). The default configuration authorizes **no directory**, **no writes**, and **no commands**.
 
+`deniedNames` only adds exclusions. Sensitive names including `.ssh`, `.aws`, `.env`, `.git`, `.npmrc`, `.netrc`, and `.kube` are always denied, even if the custom list is empty. This is a defense-in-depth filter, not a guarantee against every secret or filesystem race.
+
 ```bash
 node dist/cli.js start
 ```

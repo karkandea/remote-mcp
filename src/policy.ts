@@ -8,6 +8,13 @@ function inside(candidate: string, root: string): boolean {
   return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 }
 
+// These names remain protected even when a config supplies a custom deniedNames
+// list; user entries can extend this baseline, not silently remove it.
+const protectedNames = new Set([
+  '.ssh', '.aws', '.gnupg', '.env', '.git', '.npmrc', '.netrc', '.git-credentials',
+  '.docker', '.kube', 'id_rsa', 'id_ed25519',
+]);
+
 export class PathPolicy {
   private constructor(private readonly config: AgentConfig, private readonly roots: string[]) {}
 
@@ -24,7 +31,7 @@ export class PathPolicy {
   listRoots(): string[] { return [...this.roots]; }
 
   private denySensitive(candidate: string): void {
-    const forbidden = new Set(this.config.deniedNames.map(name => name.toLowerCase()));
+    const forbidden = new Set([...protectedNames, ...this.config.deniedNames.map(name => name.toLowerCase())]);
     const segments = candidate.split(path.sep).filter(Boolean);
     if (segments.some(segment => forbidden.has(segment.toLowerCase()) || segment.toLowerCase().startsWith('.env.'))) {
       throw new AgentError('SENSITIVE_PATH', 'Access to protected paths is denied');

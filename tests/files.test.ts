@@ -46,6 +46,17 @@ test('sensitive filenames remain denied even inside an allowed root', async () =
   await assert.rejects(policy.readPath(path.join(safe, '.env')), /protected paths/);
 });
 
+test('custom deny list cannot weaken mandatory secret protections', async () => {
+  const { safe } = await fixture();
+  await writeFile(path.join(safe, '.npmrc'), 'secret');
+  await writeFile(path.join(safe, 'custom-secret'), 'secret');
+  const policy = await PathPolicy.create(configSchema.parse({
+    allowedRoots: [safe], deniedNames: ['custom-secret'],
+  }));
+  await assert.rejects(policy.readPath(path.join(safe, '.npmrc')), /protected paths/);
+  await assert.rejects(policy.readPath(path.join(safe, 'custom-secret')), /protected paths/);
+});
+
 test('writes are off by default', async () => {
   const { files, filename } = await fixture();
   await assert.rejects(files.applyPatch(filename, 'hello', 'changed'), /Write permission is disabled/);
@@ -59,4 +70,19 @@ test('exact patch succeeds with hash; stale content and repeated matches fail cl
   assert.notEqual(result.afterSha256, old.sha256);
   await assert.rejects(files.applyPatch(filename, 'changed', 'x', old.sha256), /hash differs/);
   await assert.rejects(files.applyPatch(filename, 'e', 'z'), /exactly once/);
+});
+
+test('directory listings cap entries without loading the entire directory', async () => {
+  const { safe, files } = await fixture();
+  await Promise.all(Array.from({ length: 220 }, (_, index) =>
+    writeFile(path.join(safe, `entry-${index}.txt`), 'ok')));
+  const result = await files.list(safe) as { entries: Array<{ name: string }>; truncated: boolean };
+  assert.equal(result.entries.length, 200);
+  assert.equal(result.truncated, true);
+});
+
+test('oversized patch replacement is rejected before rewriting the file', async () => {
+  const { files, filename } = await fixture(true);
+  await assert.rejects(files.applyPatch(filename, 'hello', 'x'.repeat(262_145)), /Patch text exceeds/);
+  assert.equal(await readFile(filename, 'utf8'), 'hello\nTODO one\n');
 });

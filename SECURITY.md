@@ -19,8 +19,8 @@ Use GitHub's private security advisory feature after the repository is published
 ## Controls implemented
 
 - Deny-by-default roots, writes, and terminal profiles.
-- Canonical path checks; sensitive filename denial; final-component symlink rejection.
-- File and output byte limits; search depth/file/result bounds.
+- Canonical path checks; mandatory sensitive filename denial even with a custom deny list; final-component symlink rejection.
+- Bounded file reads even if a file grows while being read, bounded directory listing, and serialized MCP response byte cap; search depth/file/result bounds.
 - Exact-content and optional SHA-256 file edit conflict checks; temporary-file replacement.
 - Fixed executable/arguments/cwd process profiles, no shell interpretation, timeout and cancellation, concurrency cap.
 - Git operations are read-only and disable external diffs.

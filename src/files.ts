@@ -1,6 +1,7 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { constants } from 'node:fs';
-import { open, readdir, rename, stat, unlink, lstat } from 'node:fs/promises';
+import { open, opendir, readdir, rename, stat, unlink, lstat } from 'node:fs/promises';
+import type { FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import type { AgentConfig } from './config.js';
 import { AgentError } from './errors.js';
@@ -8,16 +9,35 @@ import { PathPolicy } from './policy.js';
 
 function sha256(value: Buffer | string): string { return createHash('sha256').update(value).digest('hex'); }
 
+// A stat-before-read check alone is not a byte limit: another process can grow
+// a file after stat() but before readFile() finishes.
+async function readBounded(handle: FileHandle, maxBytes: number): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  while (bytes <= maxBytes) {
+    const next = Buffer.allocUnsafe(Math.min(64 * 1024, maxBytes + 1 - bytes));
+    const { bytesRead } = await handle.read(next, 0, next.length, null);
+    if (bytesRead === 0) return Buffer.concat(chunks, bytes);
+    bytes += bytesRead;
+    if (bytes > maxBytes) throw new AgentError('FILE_TOO_LARGE', 'File exceeds read limit');
+    chunks.push(next.subarray(0, bytesRead));
+  }
+  throw new AgentError('FILE_TOO_LARGE', 'File exceeds read limit');
+}
+
 export class FileTools {
   constructor(private readonly policy: PathPolicy, private readonly config: AgentConfig) {}
 
   async list(input: string): Promise<unknown> {
     const target = await this.policy.readPath(input);
-    const entries = await readdir(target, { withFileTypes: true });
-    return { path: target, entries: entries.slice(0, 200).map(entry => ({
-      name: entry.name,
-      type: entry.isSymbolicLink() ? 'symlink' : entry.isDirectory() ? 'directory' : entry.isFile() ? 'file' : 'other',
-    })), truncated: entries.length > 200 };
+    const entries: Array<{ name: string; type: string }> = [];
+    let truncated = false;
+    for await (const entry of await opendir(target)) {
+      if (entries.length === 200) { truncated = true; break; }
+      entries.push({ name: entry.name,
+        type: entry.isSymbolicLink() ? 'symlink' : entry.isDirectory() ? 'directory' : entry.isFile() ? 'file' : 'other' });
+    }
+    return { path: target, entries, truncated };
   }
 
   async stat(input: string): Promise<unknown> {
@@ -33,10 +53,8 @@ export class FileTools {
     try {
       const info = await handle.stat();
       if (!info.isFile()) throw new AgentError('NOT_FILE', 'Expected a regular file');
-      if (info.size > Math.min(this.config.maxReadBytes, this.config.maxOutputBytes - 2048)) {
-        throw new AgentError('FILE_TOO_LARGE', 'File exceeds response limit');
-      }
-      const value = await handle.readFile();
+      if (info.size > this.config.maxReadBytes) throw new AgentError('FILE_TOO_LARGE', 'File exceeds read limit');
+      const value = await readBounded(handle, this.config.maxReadBytes);
       if (value.includes(0)) throw new AgentError('BINARY_FILE', 'Binary files are not supported');
       let content: string;
       try { content = new TextDecoder('utf-8', { fatal: true }).decode(value); }
@@ -81,6 +99,9 @@ export class FileTools {
 
   async applyPatch(input: string, expectedText: string, replacementText: string, expectedSha256?: string): Promise<unknown> {
     if (!expectedText || expectedText === replacementText) throw new AgentError('INVALID_PATCH', 'Expected and replacement text must differ, and expectedText must be nonempty');
+    if (Buffer.byteLength(replacementText) > this.config.maxReadBytes || Buffer.byteLength(expectedText) > this.config.maxReadBytes) {
+      throw new AgentError('FILE_TOO_LARGE', 'Patch text exceeds maxReadBytes');
+    }
     const target = await this.policy.writePath(input);
     const handle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW);
     let original: Buffer;
@@ -89,7 +110,7 @@ export class FileTools {
       const info = await handle.stat();
       if (!info.isFile() || info.size > this.config.maxReadBytes) throw new AgentError('FILE_TOO_LARGE', 'Target is not a supported regular file');
       mode = info.mode & 0o777;
-      original = await handle.readFile();
+      original = await readBounded(handle, this.config.maxReadBytes);
     } finally { await handle.close(); }
     const initialHash = sha256(original);
     if (expectedSha256 && initialHash !== expectedSha256) throw new AgentError('CONFLICT', 'File hash differs from expectedSha256');
@@ -110,7 +131,7 @@ export class FileTools {
       // Best-effort concurrency detection; not a hardened transactional filesystem sandbox.
       const current = await this.policy.writePath(target);
       const verify = await open(current, constants.O_RDONLY | constants.O_NOFOLLOW);
-      try { if (sha256(await verify.readFile()) !== initialHash) throw new AgentError('CONFLICT', 'File changed during patch'); }
+      try { if (sha256(await readBounded(verify, this.config.maxReadBytes)) !== initialHash) throw new AgentError('CONFLICT', 'File changed during patch'); }
       finally { await verify.close(); }
       await rename(tmp, target);
     } catch (error) {
