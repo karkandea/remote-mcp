@@ -5,6 +5,7 @@ import { createMcpHandler } from '@modelcontextprotocol/server';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { createProxyServer } from './proxy-server.js';
 import { createAgentSocketServer, RelayChannel } from './relay-channel.js';
+import { auditVpsStorage } from './vps-storage.js';
 
 export type RelayConfig = {
   publicOrigin: string;
@@ -80,12 +81,13 @@ async function proxyResponse(res: ServerResponse, response: Response): Promise<v
 }
 
 export async function startRelayServer(config: RelayConfig,
-  verifyToken: (token: string) => Promise<boolean> = createOAuthTokenVerifier(config)):
+  verifyToken: (token: string) => Promise<boolean> = createOAuthTokenVerifier(config),
+  storageAudit: () => Promise<unknown> = auditVpsStorage):
   Promise<{ port: number; channel: RelayChannel; close: () => Promise<void> }> {
   validateRelayConfig(config);
   const channel = new RelayChannel();
   const agentSockets = createAgentSocketServer(channel, config.deviceToken);
-  const handler = createMcpHandler(() => createProxyServer(channel), { maxRequestBodySize: 1_048_576 });
+  const handler = createMcpHandler(() => createProxyServer(channel, storageAudit), { maxRequestBodySize: 1_048_576 });
   const metadataPath = '/.well-known/oauth-protected-resource';
   const metadataUrl = `${config.publicOrigin}${metadataPath}`;
   const http = createServer((req, res) => {

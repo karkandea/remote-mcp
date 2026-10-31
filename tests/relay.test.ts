@@ -37,7 +37,8 @@ test('OAuth gate blocks anonymous callers; MCP request crosses VPS channel and r
   const outside = path.join(outsideRoot, 'not-authorized.txt');
   await writeFile(file, 'actual Mac document through relay');
   await writeFile(outside, 'must not leak');
-  const relay = await startRelayServer(relayConfig, async token => token === 'authorized-test-token');
+  const relay = await startRelayServer(relayConfig, async token => token === 'authorized-test-token',
+    async () => ({ host: 'test-vps', readOnly: true, rootDisk: { availableBytes: 123456 } }));
   const base = `http://127.0.0.1:${relay.port}`;
   const previousMacFlag = process.env.REMOTE_MCP_ALLOW_NON_MAC;
   const previousConfig = process.env.REMOTE_MCP_CONFIG;
@@ -77,7 +78,11 @@ test('OAuth gate blocks anonymous callers; MCP request crosses VPS channel and r
       { authProvider: { token: async () => 'authorized-test-token' } });
     await client.connect(transport);
     const listed = await client.listTools();
-    assert.equal(listed.tools.length, 21);
+    assert.equal(listed.tools.length, 22);
+    assert.ok(listed.tools.some(tool => tool.name === 'vps_storage_audit'));
+    const audit = await client.callTool({ name: 'vps_storage_audit', arguments: {} });
+    assert.equal(audit.isError, undefined);
+    assert.match(JSON.stringify(audit.content), /test-vps/);
     const offline = await client.callTool({ name: 'fs_read', arguments: { path: file } });
     assert.equal(offline.isError, true);
     assert.match(JSON.stringify(offline.content), /offline/);
@@ -105,6 +110,9 @@ test('OAuth gate blocks anonymous callers; MCP request crosses VPS channel and r
       await new Promise(resolve => setTimeout(resolve, 10));
     }
     assert.equal(relay.channel.connected, false);
+    const offlineAudit = await client.callTool({ name: 'vps_storage_audit', arguments: {} });
+    assert.equal(offlineAudit.isError, undefined);
+    assert.match(JSON.stringify(offlineAudit.content), /test-vps/);
     const afterDisconnect = await client.callTool({ name: 'fs_read', arguments: { path: file } });
     assert.equal(afterDisconnect.isError, true);
     assert.match(JSON.stringify(afterDisconnect.content), /offline/);

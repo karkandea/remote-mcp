@@ -4,6 +4,8 @@ This is an **alternative to OpenAI Secure MCP Tunnel**, not a wrapper around Ope
 
 **Always-on behavior:** the gateway, OAuth verification, MCP tool discovery and health endpoint live on the VPS independently of the Mac. A browser or ChatGPT session **on the Mac** talks to the VPS just like any other client. When the Mac agent itself is offline, remote Mac filesystem and process calls return an explicit `Mac agent is offline` error; the VPS cannot access a powered-off Mac. VPS-hosted resources or future server-side tools would need a separate, tightly restricted executor. Never point the existing Mac filesystem tools at shared VPS production files.
 
+The `vps_storage_audit` tool is the first **VPS-local, read-only** exception: it runs inside the existing unprivileged, always-on relay process, even when the Mac agent is offline. It never forwards VPS file paths to the Mac.
+
 ```mermaid
 flowchart TD
   C[ChatGPT MCP client] -->|HTTPS + OAuth access token| V[VPS MCP resource server]
@@ -58,6 +60,14 @@ Example of narrow opt-ins (substitute only local, trusted target names):
 ```
 
 Avoid allowing critical apps or broad process names like `node` without reviewing every matching user process. Changes to the Mac configuration require an agent restart. This is intentionally **not unrestricted Desktop Commander parity**: shell access, global filesystem access, arbitrary system shutdown/reboot, and privileged service control are excluded.
+
+## Read-only VPS storage inventory
+
+`vps_storage_audit` takes **no arguments**, uses the existing owner-bound `mcp:tools` OAuth authorization, and reads root filesystem capacity plus a bounded directory sample: `/var/cache/apt/archives`, `/var/log`, `/opt`, `/srv`, and `/var/www`. Each `du` call has a two-second timeout, runs sequentially, stays on one filesystem and does not follow directory symlinks. Read-only Docker disk summary and journal usage probes have three-second timeouts.
+
+The relay remains the non-root `remote-mcp` service with systemd filesystem protections. Protected paths and the Docker socket may be inaccessible; the report marks them unavailable rather than silently inventing sizes. Reports are cached for 60 seconds to prevent repeated expensive walks. Subprocesses receive a minimal environment without relay credentials. No sudo, shell, delete, prune, or writable filesystem tool is provided on the VPS.
+
+Any cleanup suggestions are **review-only candidates**, not permission to remove data. A full root-owned Docker or journal audit requires a separately approved privileged collector; do not weaken the relay service to grant broad access.
 
 ## VPS environment variables
 

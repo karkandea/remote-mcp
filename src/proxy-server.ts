@@ -1,11 +1,23 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import { toResult } from './errors.js';
 import type { RelayChannel } from './relay-channel.js';
+import { auditVpsStorage } from './vps-storage.js';
 
-/** Mirror the local tool names and argument schemas; actual authorization stays on the Mac. */
-export function createProxyServer(channel: RelayChannel): McpServer {
+/** Mac tool requests cross the agent channel; VPS inventory is read locally by the relay. */
+export function createProxyServer(channel: RelayChannel, storageAudit: () => Promise<unknown> = auditVpsStorage): McpServer {
   const server = new McpServer({ name: 'remote-mcp-relay', version: '0.1.0-alpha.1' });
   const auth = { _meta: { securitySchemes: [{ type: 'oauth2', scopes: ['mcp:tools'] }] } };
+  server.registerTool('vps_storage_audit', { ...auth,
+    description: 'Read-only disk-space inventory on the always-on Linux VPS relay: fixed directories, Docker summary and journal usage. No delete or arbitrary commands.',
+    annotations: { readOnlyHint: true }, inputSchema: z.object({}) }, async () => {
+      try {
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ ok: true, data: await storageAudit() }) }] };
+      } catch (error) {
+        return { isError: true, content: [{ type: 'text' as const,
+          text: JSON.stringify({ ok: false, error: toResult(error) }) }] };
+      }
+    });
   server.registerTool('fs_list', { ...auth, description: 'List an approved directory on the connected Mac',
     annotations: { readOnlyHint: true }, inputSchema: z.object({ path: z.string() }) },
     args => channel.call('fs_list', args));
