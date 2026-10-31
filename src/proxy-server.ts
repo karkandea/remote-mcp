@@ -65,6 +65,31 @@ export function createProxyServer(channel: RelayChannel, storageAudit: () => Pro
     args => channel.call('terminal_poll', args));
   server.registerTool('terminal_cancel', { ...auth, description: 'Stop one approved local execution',
     inputSchema: z.object({ executionId: z.string().uuid() }) }, args => channel.call('terminal_cancel', args));
+  server.registerTool('iphone_status', { ...auth, description: 'Read Mac Appium service and iPhone session status (requires local owner opt-in)',
+    annotations: { readOnlyHint: true }, inputSchema: z.object({}) }, args => channel.call('iphone_status', args));
+  server.registerTool('iphone_appium_server_start', { ...auth, description: 'Start the locally allowlisted Mac Appium executable bound to loopback, without a shell',
+    inputSchema: z.object({}) }, args => channel.call('iphone_appium_server_start', args));
+  server.registerTool('iphone_appium_server_stop', { ...auth, description: 'Stop only the Appium process started by the Mac agent',
+    inputSchema: z.object({}) }, args => channel.call('iphone_appium_server_stop', args));
+  server.registerTool('iphone_session_start', { ...auth, description: 'Start a locally configured iPhone XCUITest session; call iphone_status to poll progress',
+    inputSchema: z.object({}) }, args => channel.call('iphone_session_start', args));
+  server.registerTool('iphone_session_stop', { ...auth, description: 'End the active Appium iPhone session',
+    inputSchema: z.object({}) }, args => channel.call('iphone_session_stop', args));
+  server.registerTool('iphone_ui_tree', { ...auth, description: 'Read bounded iPhone UI hierarchy, potentially containing private on-screen text',
+    annotations: { readOnlyHint: true }, inputSchema: z.object({ maxCharacters: z.number().int().min(100).max(35_000).default(12_000) }) },
+    args => channel.call('iphone_ui_tree', args));
+  server.registerTool('iphone_tap', { ...auth, description: 'Tap a coordinate on the currently connected iPhone',
+    inputSchema: z.object({ x: z.number().int().min(0).max(4096), y: z.number().int().min(0).max(4096) }) },
+    args => channel.call('iphone_tap', args));
+  server.registerTool('iphone_swipe', { ...auth, description: 'Perform a bounded touch swipe on the currently connected iPhone',
+    inputSchema: z.object({ fromX: z.number().int().min(0).max(4096), fromY: z.number().int().min(0).max(4096),
+      toX: z.number().int().min(0).max(4096), toY: z.number().int().min(0).max(4096),
+      durationMs: z.number().int().min(100).max(3000).default(450) }) },
+    args => channel.call('iphone_swipe', args));
+  server.registerTool('iphone_app_open', { ...auth, description: 'Activate only an iPhone app that the Mac owner allowlisted',
+    inputSchema: z.object({ bundleId: z.string().min(3).max(150) }) }, args => channel.call('iphone_app_open', args));
+  server.registerTool('iphone_screenshot', { ...auth, description: 'Return an iPhone screenshot as an image; may expose private screen content',
+    annotations: { readOnlyHint: true }, inputSchema: z.object({}) }, args => channel.call('iphone_screenshot', args));
   server.registerTool('device_info', { ...auth, description: 'Connected Mac device information',
     annotations: { readOnlyHint: true }, inputSchema: z.object({}) }, args => channel.call('device_info', args));
   server.registerTool('device_status', { ...auth, description: 'Connected Mac access and permissions',

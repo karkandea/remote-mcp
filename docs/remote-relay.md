@@ -2,6 +2,8 @@
 
 This is an **alternative to OpenAI Secure MCP Tunnel**, not a wrapper around OpenAI API usage. ChatGPT connects to a public HTTPS `/mcp` resource server. The Mac agent initiates an outbound authenticated `wss://` connection to the same relay. The VPS brokers individual tool calls and does not execute filesystem/terminal tools.
 
+An optional, owner-approved **iPhone Appium controller** runs on the Mac and adds ten bounded iPhone tools through this same relay. See [iPhone/Appium setup, protections, and one-time owner opt-in](iphone-appium.md). The VPS cannot control a physically disconnected or powered-off iPhone/Mac.
+
 **Always-on behavior:** the gateway, OAuth verification, MCP tool discovery and health endpoint live on the VPS independently of the Mac. A browser or ChatGPT session **on the Mac** talks to the VPS just like any other client. When the Mac agent itself is offline, remote Mac filesystem and process calls return an explicit `Mac agent is offline` error; the VPS cannot access a powered-off Mac. VPS-hosted resources or future server-side tools would need a separate, tightly restricted executor. Never point the existing Mac filesystem tools at shared VPS production files.
 
 The `vps_storage_audit` tool is the first **VPS-local, read-only** exception: it runs inside the existing unprivileged, always-on relay process, even when the Mac agent is offline. It never forwards VPS file paths to the Mac.

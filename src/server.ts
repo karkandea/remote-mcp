@@ -6,6 +6,7 @@ import { CommandTools } from './commands.js';
 import { DeviceState } from './device.js';
 import { AgentError, toResult } from './errors.js';
 import { FileTools } from './files.js';
+import { IphoneTools } from './iphone.js';
 import { PathPolicy } from './policy.js';
 import { ProcessTools } from './processes.js';
 import { SystemTools } from './system.js';
@@ -18,12 +19,13 @@ export type AgentContext = {
   commands: CommandTools;
   processes: ProcessTools;
   system: SystemTools;
+  iphone: IphoneTools;
 };
 
 export async function createContext(config: AgentConfig, device = new DeviceState()): Promise<AgentContext> {
   const policy = await PathPolicy.create(config);
   return { config, policy, device, files: new FileTools(policy, config), commands: new CommandTools(policy, config),
-    processes: new ProcessTools(config), system: new SystemTools(config) };
+    processes: new ProcessTools(config), system: new SystemTools(config), iphone: new IphoneTools(config.iphoneControl) };
 }
 
 export function createServer(ctx: AgentContext): McpServer {
@@ -95,6 +97,45 @@ export function createServer(ctx: AgentContext): McpServer {
   server.registerTool('terminal_cancel', { description: 'Terminate an authorized process execution',
     inputSchema: z.object({ executionId: z.string().uuid() }) },
     wrap('terminal_cancel', ({ executionId }: { executionId: string }) => ctx.commands.cancel(executionId)));
+  server.registerTool('iphone_status', { description: 'Check the locally opted-in Appium service and iPhone session state',
+    annotations: { readOnlyHint: true }, inputSchema: z.object({}) }, wrap('iphone_status', () => ctx.iphone.status()));
+  server.registerTool('iphone_appium_server_start', { description: 'Start only the exact Appium binary approved in local Mac configuration, bound to 127.0.0.1; no shell',
+    inputSchema: z.object({}) }, wrap('iphone_appium_server_start', () => ctx.iphone.startServer()));
+  server.registerTool('iphone_appium_server_stop', { description: 'Stop only an Appium process launched by this Mac agent; never kills unrelated services',
+    inputSchema: z.object({}) }, wrap('iphone_appium_server_stop', () => ctx.iphone.stopServer()));
+  server.registerTool('iphone_session_start', { description: 'Start an iPhone XCUITest session asynchronously using only Mac-owner-configured capabilities; poll iphone_status until ready',
+    inputSchema: z.object({}) }, wrap('iphone_session_start', () => ctx.iphone.start()));
+  server.registerTool('iphone_session_stop', { description: 'End the active Appium iPhone session',
+    inputSchema: z.object({}) }, wrap('iphone_session_stop', () => ctx.iphone.stop()));
+  server.registerTool('iphone_ui_tree', { description: 'Read a bounded iPhone accessibility/UI hierarchy; may include private on-screen text',
+    annotations: { readOnlyHint: true }, inputSchema: z.object({ maxCharacters: z.number().int().min(100).max(35_000).default(12_000) }) },
+    wrap('iphone_ui_tree', ({ maxCharacters }: { maxCharacters: number }) => ctx.iphone.uiTree(maxCharacters)));
+  server.registerTool('iphone_tap', { description: 'Tap an iPhone screen point using W3C touch actions; coordinates in display points',
+    inputSchema: z.object({ x: z.number().int().min(0).max(4096), y: z.number().int().min(0).max(4096) }) },
+    wrap('iphone_tap', ({ x, y }: { x: number; y: number }) => ctx.iphone.tap(x, y)));
+  server.registerTool('iphone_swipe', { description: 'Swipe between two iPhone screen points using W3C touch actions',
+    inputSchema: z.object({ fromX: z.number().int().min(0).max(4096), fromY: z.number().int().min(0).max(4096),
+      toX: z.number().int().min(0).max(4096), toY: z.number().int().min(0).max(4096),
+      durationMs: z.number().int().min(100).max(3000).default(450) }) },
+    wrap('iphone_swipe', ({ fromX, fromY, toX, toY, durationMs }: {
+      fromX: number; fromY: number; toX: number; toY: number; durationMs: number;
+    }) => ctx.iphone.swipe(fromX, fromY, toX, toY, durationMs)));
+  server.registerTool('iphone_app_open', { description: 'Activate a Mac-owner-allowlisted iPhone app by bundle ID',
+    inputSchema: z.object({ bundleId: z.string().min(3).max(150) }) },
+    wrap('iphone_app_open', ({ bundleId }: { bundleId: string }) => ctx.iphone.openApp(bundleId)));
+  server.registerTool('iphone_screenshot', { description: 'Read a bounded, optionally downscaled iPhone screenshot as an image; may show private content',
+    annotations: { readOnlyHint: true }, inputSchema: z.object({}) }, async () => {
+      try {
+        await ctx.device.assertConnected();
+        const screenshot = await ctx.iphone.screenshot();
+        await ctx.device.audit('iphone_screenshot', 'ok').catch(() => {});
+        return { content: [{ type: 'image' as const, mimeType: screenshot.mimeType, data: screenshot.data }] };
+      } catch (error) {
+        const safe = toResult(error);
+        await ctx.device.audit('iphone_screenshot', 'error', safe.code).catch(() => {});
+        return { isError: true, content: [{ type: 'text' as const, text: JSON.stringify({ ok: false, error: safe }) }] };
+      }
+    });
   server.registerTool('device_info', { description: 'Show local agent device and operating system information',
     inputSchema: z.object({}) }, wrap('device_info', () => ctx.device.status(), true));
   server.registerTool('device_status', { description: 'Show connection state and configured authorized roots',
@@ -103,11 +144,14 @@ export function createServer(ctx: AgentContext): McpServer {
       commandProfiles: Object.keys(ctx.config.commandProfiles),
       processStopAllowlist: ctx.config.processStopAllowlist,
       appLaunchProfiles: Object.keys(ctx.config.appLaunchProfiles),
+      iphoneEnabled: ctx.config.iphoneControl.enabled,
+      iphoneAllowedBundleIds: ctx.config.iphoneControl.allowedBundleIds,
       serviceRestartAllowlist: ctx.config.serviceRestartAllowlist }), true));
   server.registerTool('device_disconnect', { description: 'Persistently revoke agent tool execution until owner locally resumes',
     inputSchema: z.object({}) }, wrap('device_disconnect', async () => {
       await ctx.device.disconnect();
       ctx.commands.cancelAll();
+      if (ctx.config.iphoneControl.enabled) await ctx.iphone.stop().catch(() => {});
       return { localAccessEnabled: false, resume: 'remote-mcp resume (local-only)' };
     }));
   return server;

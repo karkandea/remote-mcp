@@ -78,8 +78,9 @@ test('OAuth gate blocks anonymous callers; MCP request crosses VPS channel and r
       { authProvider: { token: async () => 'authorized-test-token' } });
     await client.connect(transport);
     const listed = await client.listTools();
-    assert.equal(listed.tools.length, 22);
+    assert.equal(listed.tools.length, 32);
     assert.ok(listed.tools.some(tool => tool.name === 'vps_storage_audit'));
+    assert.ok(listed.tools.some(tool => tool.name === 'iphone_screenshot'));
     const audit = await client.callTool({ name: 'vps_storage_audit', arguments: {} });
     assert.equal(audit.isError, undefined);
     assert.match(JSON.stringify(audit.content), /test-vps/);
