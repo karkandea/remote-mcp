@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtemp, mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { configSchema } from '../src/config.js';
@@ -28,7 +28,8 @@ test('allowed file is readable and text search returns true line locations', asy
   const result = await files.search(safe, 'TODO') as { matches: Array<{ line: number; path: string }> };
   assert.equal(result.matches.length, 1);
   assert.equal(result.matches[0]?.line, 2);
-  assert.equal(result.matches[0]?.path, filename);
+  // macOS canonicalizes /var into /private/var; compare the actual filesystem path.
+  assert.equal(result.matches[0]?.path, await realpath(filename));
 });
 
 test('path traversal, outside files, and symlink escapes are rejected', async () => {
