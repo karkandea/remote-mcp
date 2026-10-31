@@ -40,6 +40,8 @@ export const configSchema = z.object({
   maxReadBytes: z.number().int().min(1).max(10_485_760).default(262_144),
   maxOutputBytes: z.number().int().min(1024).max(1_048_576).default(65_536),
   commandProfiles: z.record(z.string(), commandProfileSchema).default({}),
+  // Owner-set, persistent opt-in: commands have the Mac login user's normal OS rights.
+  fullUserMode: z.object({ enabled: z.boolean().default(false) }).default({ enabled: false }),
   iphoneControl: iphoneControlSchema,
 });
 

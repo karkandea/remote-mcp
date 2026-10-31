@@ -44,3 +44,21 @@ test('configured long-running command can be cancelled', async () => {
   const started = await commands.start('long') as { executionId: string };
   assert.equal((commands.cancel(started.executionId) as { status: string }).status, 'cancelled');
 });
+
+test('Mac full-user mode is denied by default even when caller supplies a safe argv', async () => {
+  const commands = await commandFixture();
+  await assert.rejects(commands.startAsUser([process.execPath, '-e', 'console.log("no")'], '/tmp', 1000),
+    /not enabled/);
+});
+
+test('Mac full-user mode executes with the local account only after persistent local opt-in', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'remote-mcp-full-user-'));
+  const config = configSchema.parse({ allowedRoots: [], fullUserMode: { enabled: true } });
+  const commands = new CommandTools(await PathPolicy.create(config), config);
+  const started = await commands.startAsUser([process.execPath, '-e', 'process.stdout.write(process.getuid().toString())'], root,
+    5000) as { executionId: string };
+  const completed = await waitForEnd(commands, started.executionId);
+  assert.equal(completed.status, 'completed');
+  assert.equal(completed.stdout, String(process.getuid()));
+  await assert.rejects(commands.startAsUser([process.execPath], '.', 1000), /absolute/);
+});

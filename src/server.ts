@@ -91,6 +91,11 @@ export function createServer(ctx: AgentContext): McpServer {
   server.registerTool('terminal_start', { description: 'Execute a preconfigured exact command profile, without a shell',
     inputSchema: z.object({ profile: z.string() }) },
     wrap('terminal_start', ({ profile }: { profile: string }) => ctx.commands.start(profile)));
+  server.registerTool('mac_user_exec', { description: 'Run an arbitrary argv as the Mac login user, only after persistent local owner opt-in; no sudo or root elevation is provided',
+    inputSchema: z.object({ argv: z.array(z.string().max(4000)).min(1).max(64), cwd: z.string().min(1).max(4096),
+      timeoutMs: z.number().int().min(100).max(300_000).default(30_000) }) },
+    wrap('mac_user_exec', ({ argv, cwd, timeoutMs }: { argv: string[]; cwd: string; timeoutMs: number }) =>
+      ctx.commands.startAsUser(argv, cwd, timeoutMs)));
   server.registerTool('terminal_poll', { description: 'Get bounded process output and status for an execution ID',
     inputSchema: z.object({ executionId: z.string().uuid() }) },
     wrap('terminal_poll', ({ executionId }: { executionId: string }) => ctx.commands.poll(executionId)));
@@ -141,6 +146,7 @@ export function createServer(ctx: AgentContext): McpServer {
   server.registerTool('device_status', { description: 'Show connection state and configured authorized roots',
     inputSchema: z.object({}) }, wrap('device_status', async () => ({ ...(await ctx.device.status() as object),
       allowedRoots: ctx.policy.listRoots(), writesEnabled: ctx.config.allowWrites,
+      fullUserModeEnabled: ctx.config.fullUserMode.enabled,
       commandProfiles: Object.keys(ctx.config.commandProfiles),
       processStopAllowlist: ctx.config.processStopAllowlist,
       appLaunchProfiles: Object.keys(ctx.config.appLaunchProfiles),

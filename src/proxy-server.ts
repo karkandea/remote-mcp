@@ -1,11 +1,13 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { toResult } from './errors.js';
+import { AgentError, toResult } from './errors.js';
 import type { RelayChannel } from './relay-channel.js';
 import { auditVpsStorage } from './vps-storage.js';
+import { callRootHelper, type RootOperation } from './root-helper.js';
 
 /** Mac tool requests cross the agent channel; VPS inventory is read locally by the relay. */
-export function createProxyServer(channel: RelayChannel, storageAudit: () => Promise<unknown> = auditVpsStorage): McpServer {
+export function createProxyServer(channel: RelayChannel, storageAudit: () => Promise<unknown> = auditVpsStorage,
+  rootHelperSocket?: string): McpServer {
   const server = new McpServer({ name: 'remote-mcp-relay', version: '0.1.0-alpha.1' });
   const auth = { _meta: { securitySchemes: [{ type: 'oauth2', scopes: ['mcp:tools'] }] } };
   server.registerTool('vps_storage_audit', { ...auth,
@@ -18,6 +20,33 @@ export function createProxyServer(channel: RelayChannel, storageAudit: () => Pro
           text: JSON.stringify({ ok: false, error: toResult(error) }) }] };
       }
     });
+  async function rootCall(operation: RootOperation) {
+    try {
+      if (!rootHelperSocket) throw new AgentError('ROOT_DISABLED', 'VPS root mode is not enabled on the relay');
+      return { content: [{ type: 'text' as const,
+        text: JSON.stringify({ ok: true, data: await callRootHelper(rootHelperSocket, operation) }) }] };
+    } catch (error) {
+      return { isError: true, content: [{ type: 'text' as const,
+        text: JSON.stringify({ ok: false, error: toResult(error) }) }] };
+    }
+  }
+  server.registerTool('vps_root_status', { ...auth,
+    description: 'Check whether the owner-enabled, high-risk VPS root executor is available (no elevated action)',
+    annotations: { readOnlyHint: true }, inputSchema: z.object({}) }, () => rootCall({ action: 'status' }));
+  server.registerTool('vps_root_exec', { ...auth,
+    description: 'HIGH RISK: execute arbitrary argv as root on the VPS, with full filesystem and OS control. Use vps_root_poll for output. Only works when the separate root helper has been intentionally enabled.',
+    annotations: { destructiveHint: true }, inputSchema: z.object({
+      argv: z.array(z.string().max(4000)).min(1).max(64), cwd: z.string().min(1).max(4096),
+      timeoutMs: z.number().int().min(100).max(300_000).default(30_000),
+    }) }, ({ argv, cwd, timeoutMs }) => rootCall({ action: 'start', argv, cwd, timeoutMs }));
+  server.registerTool('vps_root_poll', { ...auth,
+    description: 'Read bounded output and exit status from a previously started VPS root command',
+    annotations: { readOnlyHint: true }, inputSchema: z.object({ executionId: z.string().uuid() }) },
+    ({ executionId }) => rootCall({ action: 'poll', executionId }));
+  server.registerTool('vps_root_cancel', { ...auth,
+    description: 'Terminate one VPS root execution and its process group',
+    annotations: { destructiveHint: true }, inputSchema: z.object({ executionId: z.string().uuid() }) },
+    ({ executionId }) => rootCall({ action: 'cancel', executionId }));
   server.registerTool('fs_list', { ...auth, description: 'List an approved directory on the connected Mac',
     annotations: { readOnlyHint: true }, inputSchema: z.object({ path: z.string() }) },
     args => channel.call('fs_list', args));
@@ -60,6 +89,9 @@ export function createProxyServer(channel: RelayChannel, storageAudit: () => Pro
   }
   server.registerTool('terminal_start', { ...auth, description: 'Run a locally approved exact command profile (no shell)',
     inputSchema: z.object({ profile: z.string() }) }, args => channel.call('terminal_start', args));
+  server.registerTool('mac_user_exec', { ...auth, description: 'Execute arbitrary argv with Mac login-user privileges after the owner locally enables fullUserMode; use terminal_poll for output',
+    annotations: { destructiveHint: true }, inputSchema: z.object({ argv: z.array(z.string().max(4000)).min(1).max(64), cwd: z.string().min(1).max(4096),
+      timeoutMs: z.number().int().min(100).max(300_000).default(30_000) }) }, args => channel.call('mac_user_exec', args));
   server.registerTool('terminal_poll', { ...auth, description: 'Read bounded output for a local execution',
     annotations: { readOnlyHint: true }, inputSchema: z.object({ executionId: z.string().uuid() }) },
     args => channel.call('terminal_poll', args));

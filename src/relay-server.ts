@@ -15,6 +15,7 @@ export type RelayConfig = {
   deviceToken: string;
   bind: string;
   port: number;
+  rootHelperSocket?: string;
 };
 
 export function relayConfigFromEnv(env: NodeJS.ProcessEnv = process.env): RelayConfig {
@@ -23,6 +24,7 @@ export function relayConfigFromEnv(env: NodeJS.ProcessEnv = process.env): RelayC
     jwksUrl: env.RELAY_JWKS_URL ?? '', ownerSubject: env.RELAY_OWNER_SUB ?? '',
     deviceToken: env.RELAY_DEVICE_TOKEN ?? '', bind: env.RELAY_BIND ?? '127.0.0.1',
     port: Number(env.RELAY_PORT ?? '3417'),
+    rootHelperSocket: env.RELAY_ROOT_HELPER_SOCKET || undefined,
   };
 }
 
@@ -47,6 +49,9 @@ export function validateRelayConfig(config: RelayConfig): void {
   if (!Number.isInteger(config.port) || config.port < 0 || config.port > 65535) throw new Error('Invalid RELAY_PORT');
   // Security default: Nginx reverse-proxies loopback. Never bind relay to a public interface.
   if (config.bind !== '127.0.0.1' && config.bind !== '::1') throw new Error('Relay must bind to loopback');
+  if (config.rootHelperSocket && config.rootHelperSocket !== '/run/remote-mcp-root/exec.sock') {
+    throw new Error('RELAY_ROOT_HELPER_SOCKET must be /run/remote-mcp-root/exec.sock');
+  }
 }
 
 export function createOAuthTokenVerifier(config: RelayConfig): (token: string) => Promise<boolean> {
@@ -87,7 +92,8 @@ export async function startRelayServer(config: RelayConfig,
   validateRelayConfig(config);
   const channel = new RelayChannel();
   const agentSockets = createAgentSocketServer(channel, config.deviceToken);
-  const handler = createMcpHandler(() => createProxyServer(channel, storageAudit), { maxRequestBodySize: 1_048_576 });
+  const handler = createMcpHandler(() => createProxyServer(channel, storageAudit, config.rootHelperSocket),
+    { maxRequestBodySize: 1_048_576 });
   const metadataPath = '/.well-known/oauth-protected-resource';
   const metadataUrl = `${config.publicOrigin}${metadataPath}`;
   const http = createServer((req, res) => {

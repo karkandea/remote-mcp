@@ -23,6 +23,7 @@ test('relay configuration fails closed and compares device credentials safely', 
   assert.throws(() => validateRelayConfig({ ...relayConfig, publicOrigin: 'http://mcp.example.test' }), /HTTPS/);
   assert.throws(() => validateRelayConfig({ ...relayConfig, jwksUrl: 'https://evil.test/keys' }), /issuer origin/);
   assert.throws(() => validateRelayConfig({ ...relayConfig, deviceToken: 'weak' }), /32/);
+  assert.throws(() => validateRelayConfig({ ...relayConfig, rootHelperSocket: '/tmp/evil.sock' }), /ROOT_HELPER_SOCKET/);
   assert.throws(() => validateAgentConnection({ url: 'ws://public.example.test/agent/ws', token: secret }), /wss/);
   assert.throws(() => validateAgentConnection({ url: 'wss://example.test/agent/ws?token=secret', token: secret }), /without credentials/);
   assert.equal(safeTokenEqual(`Bearer ${secret}`, secret), true);
@@ -78,12 +79,25 @@ test('OAuth gate blocks anonymous callers; MCP request crosses VPS channel and r
       { authProvider: { token: async () => 'authorized-test-token' } });
     await client.connect(transport);
     const listed = await client.listTools();
-    assert.equal(listed.tools.length, 32);
+    assert.equal(listed.tools.length, 37);
     assert.ok(listed.tools.some(tool => tool.name === 'vps_storage_audit'));
     assert.ok(listed.tools.some(tool => tool.name === 'iphone_screenshot'));
+    assert.ok(listed.tools.some(tool => tool.name === 'mac_user_exec'));
+    assert.ok(listed.tools.some(tool => tool.name === 'vps_root_exec'));
     const audit = await client.callTool({ name: 'vps_storage_audit', arguments: {} });
     assert.equal(audit.isError, undefined);
     assert.match(JSON.stringify(audit.content), /test-vps/);
+    const rootDenied = await client.callTool({ name: 'vps_root_exec', arguments: {
+      argv: ['/usr/bin/id'], cwd: '/tmp', timeoutMs: 1000,
+    } });
+    assert.equal(rootDenied.isError, true);
+    assert.match(JSON.stringify(rootDenied.content), /not enabled/);
+    const anonymousRoot = await fetch(`${base}/mcp`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'vps_root_exec',
+        arguments: { argv: ['/usr/bin/id'], cwd: '/', timeoutMs: 1000 } } }),
+    });
+    assert.equal(anonymousRoot.status, 401);
     const offline = await client.callTool({ name: 'fs_read', arguments: { path: file } });
     assert.equal(offline.isError, true);
     assert.match(JSON.stringify(offline.content), /offline/);

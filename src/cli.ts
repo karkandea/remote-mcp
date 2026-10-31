@@ -6,6 +6,7 @@ import { runStdio } from './server.js';
 import { toResult } from './errors.js';
 import { runRemoteAgent } from './remote-agent.js';
 import { relayConfigFromEnv, startRelayServer } from './relay-server.js';
+import { startRootHelper } from './root-helper.js';
 
 async function main(): Promise<void> {
   const command = process.argv[2] ?? 'help';
@@ -36,6 +37,14 @@ async function main(): Promise<void> {
       process.once('SIGTERM', stop);
       return;
     }
+    case 'root-helper': {
+      // Fixed absolute runtime socket; systemd provisions its root-owned parent directory.
+      const helper = await startRootHelper('/run/remote-mcp-root/exec.sock');
+      const stop = async () => { await helper.close(); process.exitCode = 0; };
+      process.once('SIGINT', stop);
+      process.once('SIGTERM', stop);
+      return;
+    }
     case 'doctor': {
       const report: Record<string, unknown> = {
         platform: process.platform, node: process.version, configFile: configPath(),
@@ -46,6 +55,7 @@ async function main(): Promise<void> {
           const config = await loadConfig();
           report.allowedRoots = config.allowedRoots;
           report.writesEnabled = config.allowWrites;
+          report.fullUserModeEnabled = config.fullUserMode.enabled;
           report.commandProfiles = Object.keys(config.commandProfiles);
         } catch (error) { report.configError = toResult(error); }
       }
@@ -69,7 +79,7 @@ async function main(): Promise<void> {
       process.stdout.write('Local access re-enabled. Restart the MCP host connection.\n');
       return;
     default:
-      process.stdout.write('Usage: remote-mcp <init|start|agent|relay|stop|resume|status|doctor|config>\n');
+      process.stdout.write('Usage: remote-mcp <init|start|agent|relay|root-helper|stop|resume|status|doctor|config>\n');
       if (command !== 'help') process.exitCode = 2;
   }
 }

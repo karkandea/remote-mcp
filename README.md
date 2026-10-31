@@ -79,6 +79,7 @@ Tests use synthetic temporary directories, not personal repositories. The MCP te
 - [Security model](SECURITY.md)
 - [Roadmap and acceptance criteria](docs/roadmap.md)
 - [VPS-only CI policy](docs/vps-ci.md)
+- [Unrestricted Mode, high-risk opt-in (draft only)](docs/unrestricted-mode.md)
 - [Independent VPS CI runner deployment](ci/README.md)
 - [Mac verification checkpoint](docs/verification-2026-10-31.md)
 - [Contributing](CONTRIBUTING.md)
@@ -88,7 +89,7 @@ Tests use synthetic temporary directories, not personal repositories. The MCP te
 ## Important limitations
 
 - The local prototype runs under the privileges of the user launching it. It is **not a filesystem or process sandbox**.
-- No interactive trusted owner-approval UI exists yet; therefore, only preauthorized command profiles are exposed. High-risk arbitrary commands are not supported.
+- No interactive trusted owner-approval UI exists yet. Normal operation permits only preauthorized command profiles; the separate high-risk `mac_user_exec` and VPS root helper are *disabled by default* and documented as a draft in [Unrestricted Mode](docs/unrestricted-mode.md).
 - Symlink checks and atomic file replacement reduce common errors but cannot eliminate all filesystem race conditions.
 - A basic outbound relay, device shared-secret authentication, OAuth JWT validation, and request correlation now exist in code. Token rotation, owner UI, formal pairing, consent per tool, launchd, SaaS tenancy and authenticated ChatGPT production verification are still outstanding.
 - GitHub Actions are prohibited for this project. An independent, rootless Podman CI worker is **active on the owner's existing shared VPS**, checking new `main` commits approximately every 10 minutes. It runs as a separate non-sudo user with CPU, memory, and process caps. Public PRs are **not** executed on the shared host; without a fine-grained status token, results are available only in private VPS logs and are not shown as GitHub commit checks.

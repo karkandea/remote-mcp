@@ -45,7 +45,7 @@ test('Appium tools are local opt-in, use fixed W3C operations and restrict app a
   try {
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
     const listed = await client.listTools();
-    assert.equal(listed.tools.length, 31); // 21 Mac tools + 10 iPhone tools
+    assert.equal(listed.tools.length, 32); // 22 Mac tools + 10 iPhone tools
     const serverStart = await client.callTool({ name: 'iphone_appium_server_start', arguments: {} });
     assert.equal(serverStart.isError, true);
     assert.match(JSON.stringify(serverStart.content), /IPHONE_CONFIG/);
