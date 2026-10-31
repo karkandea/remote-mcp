@@ -16,6 +16,8 @@ The implementation is checked into this repository. The owner approved using the
 
 The checked-out repository is mounted read-only at `/input`; its files are copied into an ephemeral writable `/work` tmpfs within the container. The container has no extra Linux capabilities, no new privileges, separate user and network namespaces, CPU/RAM/PID limits, and a 6-minute job timeout. It has network access for `npm ci` and `npm audit`, so this is a first isolation layer, not a guarantee that hostile code cannot exploit a kernel/runtime vulnerability. On a shared host, this design is **only for trusted main-branch checks**.
 
+Node test files run with `--test-concurrency=1` so the `tsx` worker threads and stdio subprocess test stay within the 64-process container cap.
+
 ## Deployment checklist
 
 1. Preserve existing production configuration: inspect SSH keys, firewall, patching, disk alerts and resource headroom. Create a non-sudo `ci-runner` user; enable systemd user lingering for that account. Do **not** add it to the `docker` group or give it access to `/var/run/docker.sock`.
