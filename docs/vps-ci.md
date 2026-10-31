@@ -1,31 +1,22 @@
-# VPS-only CI design (no GitHub Actions)
+# VPS-only CI policy (no GitHub Actions)
 
-**Policy:** Do not create `.github/workflows` or enable GitHub Actions, including self-hosted GitHub Actions runners. Source hosting remains on GitHub; build and security checks execute on an isolated VPS worker.
+**Never use GitHub Actions, including GitHub self-hosted Actions runners.** GitHub hosts the public source; the CI worker runs independently on a **dedicated** VPS.
 
-## Current runnable verification
+## Delivered in repository
 
-From a disposable checkout with Node.js 22+:
+- `scripts/ci.sh`: lockfile installation, TypeScript checks, MCP integration tests, build, and npm audit. This script passed on the owner's Mac and Ubuntu VPS in a manually invoked trusted checkout.
+- `ci/runner.mjs`: an independent **main-only** poller with strict SHA checks, a fresh checkout, a pinned Node container digest requirement, rootless Podman sandbox flags, bounded execution, private logs, and optional GitHub commit status reporting.
+- `ci/systemd`: user-level oneshot service and a ~5-minute timer; no public webhook listener and no inbound CI port.
+- `ci/runner.test.mjs`: safety regression tests for SHA/input validation, digest pinning, and container confinement flags.
 
-```bash
-bash scripts/ci.sh
-```
+The worker code and unit tests are delivered, but there is currently **no dedicated VPS attached or deployed**. No background CI service has been started on the owner's shared Ubuntu VPS. Provisioning and a real container smoke test remain outstanding.
 
-The script installs the lockfile, type-checks, tests, builds, and runs `npm audit`. It is a **manual or externally scheduled verification entry point**, not an automated CI service. On 2026-10-31 it completed successfully on the owner's Ubuntu VPS against reviewed `main` (11/11 tests, 0 detected vulnerabilities). There are currently no running webhook receivers or VPS background services supplied by this repository.
+See [ci/README.md](../ci/README.md) for the deployment checklist and threat boundaries.
 
-## Proposed isolated automation
+## Design limits and future work
 
-1. GitHub webhook receiver verifies the `X-Hub-Signature-256` HMAC over the raw payload, rejects replay/duplicates, and accepts only the configured repository.
-2. A queue records an immutable commit SHA and event type (push or PR) with expiry and a bounded job ID.
-3. A dedicated non-root worker launches a short-lived container/VM for each job. It checks out the exact SHA, has no production secrets, no host-network access, no privileged mounts, and no Docker socket access.
-4. Apply CPU, RAM, output, network and execution-time limits. The worker runs `scripts/ci.sh`, collects bounded logs, and destroys the sandbox after completion.
-5. A GitHub App or scoped token can optionally report commit status, without granting code write access to the worker. GitHub Actions remain disabled.
-
-## Release-blocking requirements
-
-- Never execute arbitrary public pull-request code directly on the production VPS or under an account that can reach application data, SSH keys, databases, or Docker daemon.
-- No deployment to the existing owner's VPS until the isolated runner threat model and host separation are approved.
-- Use a dedicated CI host when possible. If shared, use strongly separated user, VM/container, network, storage, and credentials.
-- Keep webhook secrets outside Git, enforce TLS, rotate secrets, and rate-limit callbacks.
-- Test invalid webhook signatures, spoofed repository names, duplicate deliveries, cancellation, timeouts, resource exhaustion, and malicious PRs.
-
-This document defines the target. It does not claim the VPS receiver or runner is installed.
+- Only the repository's `main` branch is polled. Untrusted PR branches are **not** run, merged, or validated yet. PR CI requires a separately reviewed isolation and abuse-control design.
+- Do not run arbitrary contributor code directly on the host, under an administrator, or in a container with host mounts, privileged flags, or a Docker socket.
+- Rootless Podman is risk reduction, not an invulnerable VM. Prefer no production credentials or data anywhere on the CI host. Keep resource controls, egress policies, patching, and disk alerts active.
+- A GitHub token for status reporting is optional and restricted to commit status writes, held exclusively outside the sandbox. GitHub Actions remain disabled.
+- Branch protection must not require the VPS CI status until actual status posting has been verified end to end.

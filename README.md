@@ -76,6 +76,7 @@ Tests use synthetic temporary directories, not personal repositories. The MCP te
 - [Security model](SECURITY.md)
 - [Roadmap and acceptance criteria](docs/roadmap.md)
 - [VPS-only CI policy](docs/vps-ci.md)
+- [Dedicated VPS CI runner deployment](ci/README.md)
 - [Mac verification checkpoint](docs/verification-2026-10-31.md)
 - [Contributing](CONTRIBUTING.md)
 - [Changelog](CHANGELOG.md)
@@ -87,7 +88,7 @@ Tests use synthetic temporary directories, not personal repositories. The MCP te
 - No interactive trusted owner-approval UI exists yet; therefore, only preauthorized command profiles are exposed. High-risk arbitrary commands are not supported.
 - Symlink checks and atomic file replacement reduce common errors but cannot eliminate all filesystem race conditions.
 - No remote authentication, device pairing, outbound relay, token storage, launchd integration, or SaaS tenancy exists in this release.
-- GitHub Actions are prohibited for this project. Build/test/audit uses the `scripts/ci.sh` entry point on an isolated VPS worker; automated webhook CI is not implemented yet.
+- GitHub Actions are prohibited for this project. `scripts/ci.sh` is verified on the owner's VPS; the independent main-only CI poller and systemd timer are implemented in source but **not deployed**. Public PRs are not executed yet.
 - macOS installation and full ChatGPT-to-Mac end-to-end demonstration remain outstanding.
 
 Do not use this alpha on a privileged, company-managed, or production workstation.

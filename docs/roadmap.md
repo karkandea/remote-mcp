@@ -6,9 +6,11 @@
 - [x] Dependency lockfile and local build/test commands.
 - [x] Create public `karkandea/remote-mcp` repository and publish source.
 - [x] MIT open-source license approved by owner and added.
-- [ ] Provision and verify isolated VPS CI with webhook signature verification. GitHub Actions are prohibited.
+- [x] Implement and test a main-only independent VPS poller with rootless container isolation options; no GitHub Actions.
+- [ ] Provision a dedicated CI VPS, verify rootless container limits, and activate the systemd timer and status reporting.
+- [ ] Design and verify isolated, abuse-resistant public PR checks; main-only CI is not PR verification.
 - [x] Protect `main` against force-push and deletion, with linear commit history.
-- [ ] Add required CI status after an independently hosted, isolated VPS runner is operational.
+- [ ] Add required CI status after the independently hosted VPS runner and GitHub status reporting are operational.
 
 ## M1 — Local execution agent
 
