@@ -18,7 +18,7 @@ test('runner container has no privileged mounts and enforces resource caps', () 
     containerName: 'remote-mcp-ci-aaaa-1234' });
   const joined = args.join(' ');
   for (const flag of ['--read-only', '--cap-drop=all', '--security-opt=no-new-privileges',
-    '--pids-limit=128', '--memory=1536m', '--cpus=2', '--pull=never',
+    '--pids-limit=64', '--memory=1024m', '--pull=never',
     '--userns=keep-id', '--network=slirp4netns:allow_host_loopback=false']) {
     assert.ok(args.includes(flag), `Missing sandbox flag ${flag}`);
   }
@@ -26,5 +26,6 @@ test('runner container has no privileged mounts and enforces resource caps', () 
   assert.ok(!joined.includes('/var/run/docker.sock'));
   assert.ok(!joined.includes('--privileged'));
   assert.ok(!joined.includes('--network=host'));
+  assert.ok(!joined.includes('--cpus='), 'CPU quota is enforced by the dedicated host user slice');
   assert.ok(!joined.includes('GITHUB_TOKEN'));
 });

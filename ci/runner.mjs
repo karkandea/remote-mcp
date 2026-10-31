@@ -3,7 +3,7 @@
 // fetched repository is mounted read-only into a rootless Podman container.
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -38,10 +38,12 @@ export function buildPodmanArgs({ checkout, image, containerName }) {
     'run', '--rm', '--name', containerName, '--pull=never',
     '--read-only', '--cap-drop=all', '--security-opt=no-new-privileges',
     '--network=slirp4netns:allow_host_loopback=false',
-    '--pids-limit=128', '--memory=1536m', '--cpus=2',
+    // CPU is capped at 1 core by the host's user-1005.slice. Ubuntu 22.04's
+    // rootless Podman user manager delegates memory/pids but not the CPU cgroup.
+    '--pids-limit=64', '--memory=1024m',
     '--userns=keep-id',
     '--tmpfs=/tmp:rw,nosuid,nodev,size=128m,mode=1777',
-    '--tmpfs=/work:rw,exec,nosuid,nodev,size=1024m,mode=1777',
+    '--tmpfs=/work:rw,exec,nosuid,nodev,size=512m,mode=1777',
     '--env=CI=true', '--env=HOME=/tmp', '--env=NPM_CONFIG_CACHE=/tmp/npm-cache',
     '--volume', `${checkout}:/input:ro`, '--workdir=/work', image,
     '/bin/bash', '-ec', 'cp -a /input/. /work/ && cd /work && bash scripts/ci.sh',
@@ -96,6 +98,15 @@ async function writeState(stateDir, payload) {
   } finally {
     await rm(temporary, { force: true });
   }
+}
+
+async function pruneOldRunLogs(runsDir) {
+  // Restrict cleanup to runner-generated filenames within its own state dir.
+  // The latest 30 bounded logs consume at most approximately 30 MiB.
+  const names = (await readdir(runsDir, { withFileTypes: true }))
+    .filter(item => item.isFile() && /^\d{4}-\d{2}-\d{2}T[\d-]+Z-[a-f0-9]{12}\.log$/.test(item.name))
+    .map(item => item.name).sort().reverse();
+  for (const old of names.slice(30)) await rm(path.join(runsDir, old), { force: true });
 }
 
 async function readLastSha(stateDir) {
@@ -166,8 +177,9 @@ export async function runOnce() {
 
   const timestamp = new Date().toISOString();
   const logName = `${timestamp.replace(/[:.]/g, '-')}-${sha.slice(0, 12)}.log`;
-  await writeFile(path.join(stateDir, 'runs', logName), details.slice(0, MAX_LOG_BYTES),
+  await writeFile(path.join(stateDir, 'runs', logName), Buffer.from(details).subarray(0, MAX_LOG_BYTES),
     { mode: 0o600, flag: 'wx' });
+  await pruneOldRunLogs(path.join(stateDir, 'runs'));
   // Infrastructure failures should retry. Test failures are recorded once per SHA
   // to prevent an untrusted commit from consuming the machine every five minutes.
   if (testStarted) await writeState(stateDir, { sha, outcome, timestamp, logName });

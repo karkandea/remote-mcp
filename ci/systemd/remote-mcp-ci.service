@@ -3,9 +3,12 @@ Description=Remote MCP independent VPS CI (main branch only)
 
 [Service]
 Type=oneshot
+WorkingDirectory=%h
 EnvironmentFile=%h/.config/remote-mcp-ci/env
 ExecStart=/usr/bin/flock -n %t/remote-mcp-ci.lock /usr/bin/node %h/.local/share/remote-mcp-ci/runner.mjs
 TimeoutStartSec=10min
 UMask=0077
 NoNewPrivileges=yes
+Nice=10
+IOSchedulingClass=idle
 

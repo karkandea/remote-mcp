@@ -2,8 +2,8 @@
 Description=Poll GitHub main for independent Remote MCP VPS CI
 
 [Timer]
-OnBootSec=3min
-OnUnitInactiveSec=5min
+OnBootSec=5min
+OnUnitInactiveSec=10min
 RandomizedDelaySec=30s
 Unit=remote-mcp-ci.service
 
