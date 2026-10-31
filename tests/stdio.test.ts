@@ -20,6 +20,10 @@ test('MCP stdio subprocess discovers tools and reads an actual authorized file',
     env: { ...process.env, REMOTE_MCP_CONFIG: config, REMOTE_MCP_ALLOW_NON_MAC: '1' } as Record<string, string>,
     stderr: 'pipe',
   });
+  let stderr = '';
+  transport.stderr?.on('data', (chunk: Buffer) => {
+    if (Buffer.byteLength(stderr) < 2048) stderr += chunk.toString('utf8');
+  });
   const client = new Client({ name: 'stdio-integration-test', version: '0.1.0' });
   try {
     await client.connect(transport);
@@ -28,6 +32,8 @@ test('MCP stdio subprocess discovers tools and reads an actual authorized file',
     const result = await client.callTool({ name: 'fs_read', arguments: { path: file } });
     assert.equal(result.isError, undefined);
     assert.match(JSON.stringify(result.content), /real stdio connection/);
+  } catch (error) {
+    throw new Error(`MCP stdio test failed: ${error instanceof Error ? error.message : String(error)}; child stderr: ${stderr.slice(0, 2048)}`, { cause: error });
   } finally {
     await client.close();
   }

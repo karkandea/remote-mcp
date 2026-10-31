@@ -40,7 +40,7 @@ export function buildPodmanArgs({ checkout, image, containerName }) {
     '--network=slirp4netns:allow_host_loopback=false',
     // CPU is capped at 1 core by the host's user-1005.slice. Ubuntu 22.04's
     // rootless Podman user manager delegates memory/pids but not the CPU cgroup.
-    '--pids-limit=64', '--memory=1024m',
+    '--pids-limit=96', '--memory=1024m',
     '--userns=keep-id',
     '--tmpfs=/tmp:rw,nosuid,nodev,size=128m,mode=1777',
     '--tmpfs=/work:rw,exec,nosuid,nodev,size=512m,mode=1777',

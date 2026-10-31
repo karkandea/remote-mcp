@@ -18,7 +18,7 @@ test('runner container has no privileged mounts and enforces resource caps', () 
     containerName: 'remote-mcp-ci-aaaa-1234' });
   const joined = args.join(' ');
   for (const flag of ['--read-only', '--cap-drop=all', '--security-opt=no-new-privileges',
-    '--pids-limit=64', '--memory=1024m', '--pull=never',
+    '--pids-limit=96', '--memory=1024m', '--pull=never',
     '--userns=keep-id', '--network=slirp4netns:allow_host_loopback=false']) {
     assert.ok(args.includes(flag), `Missing sandbox flag ${flag}`);
   }
