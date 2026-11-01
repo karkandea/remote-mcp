@@ -1,0 +1,13 @@
+{
+  "capabilities": {
+    "alwaysMatch": {
+      "platformName": "iOS",
+      "appium:automationName": "XCUITest",
+      "appium:platformVersion": "26.6.1",
+      "appium:udid": "SET_DEVICE_UDID_ONLY_AFTER_SECURE_PAIRING",
+      "appium:usePreinstalledWDA": true,
+      "appium:updatedWDABundleId": "SET_SIGNED_WDA_BUNDLE_ID"
+    },
+    "firstMatch": [{}]
+  }
+}
