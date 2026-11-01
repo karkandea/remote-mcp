@@ -1,0 +1,12 @@
+# Never commit signing material, runtime credentials, device identifiers, or build results.
+*.p8
+*.p12
+*.mobileprovision
+*.sealed
+*.env
+.env.*
+ios/*.xcodeproj/
+ios/*.xcworkspace/
+ios/DerivedData/
+DerivedData/
+backend/node_modules/
