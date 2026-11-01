@@ -1,6 +1,7 @@
 import { spawn, execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
+import path from 'node:path';
 import type { AgentConfig } from './config.js';
 import { AgentError } from './errors.js';
 import { PathPolicy } from './policy.js';
@@ -44,14 +45,32 @@ export class CommandTools {
     const profile = this.config.commandProfiles[profileName];
     if (!profile) throw new AgentError('COMMAND_DENIED', 'Unknown or unauthorized command profile');
     const cwd = await this.policy.readPath(profile.cwd);
+    return this.launch(profileName, profile.executable, profile.args, cwd, profile.timeoutMs);
+  }
+
+  async startAsUser(argv: string[], cwd: string, timeoutMs: number): Promise<unknown> {
+    if (!this.config.fullUserMode.enabled) {
+      throw new AgentError('FULL_USER_DISABLED', 'Mac owner has not enabled full-user commands');
+    }
+    if (!path.isAbsolute(cwd)) throw new AgentError('INVALID_CWD', 'Working directory must be absolute');
+    if (!argv.length || argv.some(arg => arg.includes('\0'))) {
+      throw new AgentError('INVALID_COMMAND', 'Expected a nonempty argv array without NUL bytes');
+    }
+    return this.launch('full-user', argv[0]!, argv.slice(1), cwd, timeoutMs);
+  }
+
+  private launch(profileName: string, executable: string, args: string[], cwd: string, timeoutMs: number): unknown {
     if (this.jobs.size >= 30) throw new AgentError('TOO_MANY_JOBS', 'Restart the agent to clear completed job history');
     if ([...this.jobs.values()].filter(job => job.status === 'running').length >= 3) {
       throw new AgentError('BUSY', 'At most three commands may run concurrently');
     }
     const id = randomUUID();
-    const child = spawn(profile.executable, profile.args, {
+    const env: NodeJS.ProcessEnv = { ...process.env, CI: '1', GIT_TERMINAL_PROMPT: '0' };
+    delete env.RELAY_DEVICE_TOKEN;
+    delete env.REMOTE_MCP_RELAY_WS;
+    const child = spawn(executable, args, {
       cwd, shell: false, detached: process.platform !== 'win32',
-      stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, CI: '1', GIT_TERMINAL_PROMPT: '0' },
+      stdio: ['ignore', 'pipe', 'pipe'], env,
     });
     let timer: NodeJS.Timeout;
     const job: Running = { id, profile: profileName, status: 'running', startedAt: new Date().toISOString(),
@@ -91,7 +110,7 @@ export class CommandTools {
       job.exitCode = code;
       if (signal) job.stderr += `\nTerminated by signal: ${signal}`;
     });
-    timer = setTimeout(() => { if (job.status === 'running') { job.cancel(); job.status = 'timeout'; } }, profile.timeoutMs);
+    timer = setTimeout(() => { if (job.status === 'running') { job.cancel(); job.status = 'timeout'; } }, timeoutMs);
     timer.unref();
     this.jobs.set(id, job);
     return { executionId: id, status: job.status, profile: profileName };

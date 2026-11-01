@@ -1,0 +1,24 @@
+[Unit]
+Description=Remote MCP isolated local Unix socket root executor (HIGH RISK)
+After=local-fs.target
+ConditionPathExists=/opt/remote-mcp/dist/cli.js
+
+[Service]
+Type=simple
+User=root
+Group=remote-mcp
+WorkingDirectory=/opt/remote-mcp
+ExecStart=/usr/bin/node /opt/remote-mcp/dist/cli.js root-helper
+RuntimeDirectory=remote-mcp-root
+RuntimeDirectoryMode=0750
+UMask=0007
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=10s
+# Root privileges are intentional. No TCP listener, SSH, sudo or 2FA is exposed.
+# Do not grant this socket to other groups/users; group remote-mcp is trusted as root.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

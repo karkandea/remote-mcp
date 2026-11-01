@@ -1,4 +1,4 @@
-# Architecture: local first, relay later
+# Architecture: local agent and independent relay
 
 ## Delivered local slice
 
@@ -18,7 +18,21 @@ flowchart TD
 - `src/device.ts`: revocation and metadata-only local audit.
 - `src/cli.ts`: user lifecycle and diagnostics.
 
-The separation allows a future authenticated relay adapter to call the same local execution methods. It does **not** currently provide an abstract remote request router, multi-user identity, or capability tokens.
+## Experimental self-hosted relay (implemented in code; not deployed)
+
+```mermaid
+flowchart TD
+  C[ChatGPT / HTTP MCP client] -->|OAuth JWT| G[VPS loopback MCP gateway]
+  G -->|WebSocket request ID| A[Outbound Mac agent]
+  A --> L[Local MCP server + policy]
+```
+
+- `src/relay-server.ts` is a loopback-only MCP Streamable HTTP resource server. It verifies issuer, audience, signature, expiration, owner identity and scope using an external OAuth provider's JWKS. It does not implement or store OAuth user credentials.
+- `src/relay-channel.ts` authenticates one outbound Mac WebSocket with a distinct device secret, caps frame size/concurrency, and correlates asynchronous tool calls and replies.
+- `src/remote-agent.ts` connects outward, invokes the same local MCP server in memory and reconnects after disconnects.
+- `src/proxy-server.ts` advertises the remote tool contract. It never touches VPS files or executes commands. Keep its tool names and schemas in sync with `src/server.ts` until a shared generated registry is introduced.
+
+The local gateway currently handles a **single owner and one Mac**. Neither multi-user identity, device-scoped OAuth authorization, a secure pairing UI, per-invocation approval nor SaaS is implemented. See [relay setup and verification gates](remote-relay.md).
 
 ## Proposed SaaS architecture (not implemented)
 

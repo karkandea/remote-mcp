@@ -2,8 +2,12 @@
   "allowedRoots": ["/Users/YOUR_NAME/Projects/mcp-sandbox"],
   "deniedNames": [".internal-secrets"],
   "allowWrites": false,
+  "processStopAllowlist": [],
+  "appLaunchProfiles": {},
+  "serviceRestartAllowlist": [],
   "maxReadBytes": 262144,
   "maxOutputBytes": 65536,
+  "fullUserMode": { "enabled": false },
   "commandProfiles": {
     "sample-tests": {
       "executable": "/usr/bin/true",
@@ -11,5 +15,15 @@
       "cwd": "/Users/YOUR_NAME/Projects/mcp-sandbox",
       "timeoutMs": 10000
     }
+  },
+  "iphoneControl": {
+    "enabled": false,
+    "appiumPort": 4723,
+    "appiumExecutable": "/Users/YOUR_NAME/Projects/iphone-control-poc/node_modules/.bin/appium",
+    "appiumHome": "/Users/YOUR_NAME/Projects/iphone-control-poc/.appium",
+    "appiumCwd": "/Users/YOUR_NAME/Projects/iphone-control-poc",
+    "udid": "REPLACE_WITH_IPHONE_UDID",
+    "allowedBundleIds": [],
+    "wdaLocalPort": 8100
   }
 }

@@ -1,8 +1,8 @@
 # Remote MCP (alpha)
 
-An owner-controlled, local MCP server for authorized file operations, read-only Git inspection, and **preconfigured** process execution. Designed for an Apple Silicon Mac and a later secure relay, without pretending that directory restrictions constitute a shell sandbox.
+An owner-controlled Mac MCP server for authorized file operations, read-only Git inspection, and **preconfigured** process execution. Includes an experimental self-hosted relay that accepts outbound Mac connections, without pretending that directory restrictions constitute a shell sandbox.
 
-**Status:** pre-release local prototype under the MIT License. MCP tool calls have been tested with a real MCP client in an isolated test directory. ChatGPT remote access, macOS lifecycle, and SaaS are **not yet verified or shipped**.
+**Status:** MIT-licensed, single-owner alpha. The owner has deployed the loopback-only relay to a shared VPS, enabled an outbound background Mac agent, linked ChatGPT with owner-bound OAuth, and optionally activated the high-risk root socket executor. The new source is still on a **Draft PR**, not merged into `main` or recommended for public multi-tenant use. Local/relay integration tests run on Linux and macOS, but the ChatGPT host's discovery of the newest root tools has not yet been verified.
 
 ## Quick start (macOS, Node.js 22+)
 
@@ -34,13 +34,15 @@ Local lifecycle commands:
 | --- | --- |
 | `init` | Create a private, deny-by-default config (never overwrite it) |
 | `start` | Launch MCP stdio server in the foreground |
+| `agent` | Connect outward to the independent VPS relay using an authenticated WebSocket |
+| `relay` | Run a loopback-only MCP HTTP gateway and WebSocket broker on the VPS |
 | `doctor` | Print local configuration and environment diagnostics |
 | `config` | Show non-secret configuration |
 | `status` | Show locally persisted connection status |
 | `stop` | Persistently reject new tools; separately stop the MCP host process |
 | `resume` | Locally re-enable access after a stop/disconnect |
 
-The `stop` command does not independently kill a host-owned stdio process; the host still controls its lifecycle. `doctor` reports **localAccessEnabled**, not whether ChatGPT or a remote client is connected. A launchd service, menu-bar UI, and automatic reconnection have not been implemented yet.
+The `stop` command does not independently kill a host-owned stdio process; the host still controls its lifecycle. `doctor` reports **localAccessEnabled**, not whether ChatGPT or a remote client is connected. The remote agent reconnects after dropped connections; a launchd service and menu-bar UI have not been implemented yet.
 
 ## Capabilities
 
@@ -58,7 +60,7 @@ The terminal tool takes a **profile name**, not a shell script. For example, the
 
 For local clients that support stdio servers, point the client to the absolute Node executable and the absolute path to `dist/cli.js` with argument `start` (or use a client configuration that invokes `node` via `PATH`). Set the child's current account to the **non-root** Mac user who owns the config. The client must not be configured to auto-approve dangerous tools.
 
-Remote ChatGPT integration is a separate milestone: evaluate [OpenAI Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels) only where the owner's workspace and Platform organization have the required permissions. Do not expose a raw stdio-to-HTTP proxy or a terminal endpoint to the internet without authentication and authorization.
+For ChatGPT remote integration, the **self-hosted** alternative is documented in [Independent VPS relay setup](docs/remote-relay.md). It uses a standard public HTTPS MCP endpoint and OAuth 2.1; neither an OpenAI Platform API key nor an OpenAI Secure MCP Tunnel is required. **Do not expose** the HTTP gateway until the authorization provider, HTTPS reverse proxy, issuer/audience validation, and device pairing have all been verified.
 
 ## Development
 
@@ -73,9 +75,11 @@ Tests use synthetic temporary directories, not personal repositories. The MCP te
 ## Docs
 
 - [Architecture and future relay](docs/architecture.md)
+- [Independent VPS relay setup (single-owner live alpha)](docs/remote-relay.md)
 - [Security model](SECURITY.md)
 - [Roadmap and acceptance criteria](docs/roadmap.md)
 - [VPS-only CI policy](docs/vps-ci.md)
+- [Unrestricted Mode, high-risk opt-in (draft only)](docs/unrestricted-mode.md)
 - [Independent VPS CI runner deployment](ci/README.md)
 - [Mac verification checkpoint](docs/verification-2026-10-31.md)
 - [Contributing](CONTRIBUTING.md)
@@ -85,10 +89,10 @@ Tests use synthetic temporary directories, not personal repositories. The MCP te
 ## Important limitations
 
 - The local prototype runs under the privileges of the user launching it. It is **not a filesystem or process sandbox**.
-- No interactive trusted owner-approval UI exists yet; therefore, only preauthorized command profiles are exposed. High-risk arbitrary commands are not supported.
+- No interactive trusted owner-approval UI exists yet. Normal operation permits only preauthorized command profiles; the separate high-risk `mac_user_exec` and VPS root helper are *disabled by default* and documented as a draft in [Unrestricted Mode](docs/unrestricted-mode.md).
 - Symlink checks and atomic file replacement reduce common errors but cannot eliminate all filesystem race conditions.
-- No remote authentication, device pairing, outbound relay, token storage, launchd integration, or SaaS tenancy exists in this release.
+- An outbound relay, device shared-secret authentication, OAuth JWT validation and request correlation are active for the owner. Token rotation, independent trusted per-action consent, formal pairing, SaaS tenancy and the latest unrestricted-tool discovery in ChatGPT still require review.
 - GitHub Actions are prohibited for this project. An independent, rootless Podman CI worker is **active on the owner's existing shared VPS**, checking new `main` commits approximately every 10 minutes. It runs as a separate non-sudo user with CPU, memory, and process caps. Public PRs are **not** executed on the shared host; without a fine-grained status token, results are available only in private VPS logs and are not shown as GitHub commit checks.
-- macOS installation and full ChatGPT-to-Mac end-to-end demonstration remain outstanding.
+- The relay is live on the shared VPS, and the Mac user agent auto-starts with launchd. Owner-authenticated `device_status` calls work from ChatGPT. The optional root helper is also live over a private Unix socket. **Do not assume this makes remote root access safe**; see the explicit risk and kill-switch guidance in [Unrestricted Mode](docs/unrestricted-mode.md).
 
 Do not use this alpha on a privileged, company-managed, or production workstation.

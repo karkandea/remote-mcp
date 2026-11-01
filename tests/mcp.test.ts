@@ -22,6 +22,10 @@ test('real MCP client discovers tools, reads a real file, and obeys device revoc
     const tools = await client.listTools();
     assert.ok(tools.tools.some(tool => tool.name === 'fs_read'));
     assert.ok(tools.tools.some(tool => tool.name === 'terminal_start'));
+    assert.ok(tools.tools.some(tool => tool.name === 'process_list'));
+    assert.ok(tools.tools.some(tool => tool.name === 'process_stop'));
+    assert.ok(tools.tools.some(tool => tool.name === 'system_status'));
+    assert.ok(tools.tools.some(tool => tool.name === 'system_app_open'));
     const result = await client.callTool({ name: 'fs_read', arguments: { path: file } });
     assert.equal(result.isError, undefined);
     assert.match(JSON.stringify(result.content), /actual data from disk/);
