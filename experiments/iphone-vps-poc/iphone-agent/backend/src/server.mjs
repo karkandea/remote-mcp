@@ -1,9 +1,10 @@
 import http from 'node:http';
 import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { CommandQueue, safeEqual } from './commands.mjs';
+import { ACTIONS, CommandQueue, safeEqual } from './commands.mjs';
 import { SealedState } from './state.mjs';
 import { ApnsSender } from './apns.mjs';
+import { NtfySender } from './ntfy.mjs';
 
 const MAX_BODY = 4096;
 const respond = (res, status, body) => {
@@ -35,6 +36,7 @@ export async function createAgentServer({
   const queue = new CommandQueue({ now });
   const pairingExpiry = now() + pairingTtlMs;
   let pairingFailures = 0;
+  let lastTriggerAt = -Infinity;
   let writeLock = Promise.resolve();
   const persist = () => {
     writeLock = writeLock.then(() => stateStore.save(state));
@@ -83,6 +85,21 @@ export async function createAgentServer({
         if (!safeEqual(bearer, adminToken)) return respond(res, 401, { ok: false, error: 'Unauthorized admin' });
         if (req.method === 'POST' && route === '/v1/admin/commands') {
           const body = await readJson(req);
+          // ntfy trigger-only mode relies on a user-created Shortcuts automation
+          // filtering on the notification keyword; no APNs key or device pairing.
+          if (apns.triggerOnly) {
+            if (!Object.hasOwn(ACTIONS, body?.action)) return respond(res, 400, { ok: false, error: 'Unsupported action' });
+            if (now() - lastTriggerAt < 3000) return respond(res, 429, { ok: false, error: 'Slow down' });
+            if (!apns.configured) return respond(res, 503, { ok: false, error: 'Notification topic not configured' });
+            const reservedAt = now();
+            lastTriggerAt = reservedAt;
+            try { await apns.send(null, body.action); }
+            catch {
+              if (lastTriggerAt === reservedAt) lastTriggerAt = -Infinity;
+              return respond(res, 502, { ok: false, error: 'Notification delivery failed' });
+            }
+            return respond(res, 202, { ok: true, notificationSent: true, status: 'notification_sent_not_executed' });
+          }
           if (!state.deviceSecretHash) return respond(res, 409, { ok: false, error: 'No paired iPhone' });
           if (!apns.configured && !manualMode) return respond(res, 503, { ok: false, error: 'APNs not configured' });
           if (apns.configured && !state.apnsToken) return respond(res, 409, { ok: false, error: 'No APNs device token registered' });
@@ -112,8 +129,10 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const env = process.env;
   const config = {
     stateStore: new SealedState(env.IPHONE_AGENT_STATE_FILE, env.IPHONE_AGENT_STATE_KEY),
-    apns: new ApnsSender({ keyId: env.APNS_KEY_ID, teamId: env.APNS_TEAM_ID,
-      topic: env.APNS_TOPIC, keyPath: env.APNS_KEY_PATH, environment: env.APNS_ENVIRONMENT }),
+    apns: env.IPHONE_AGENT_NTFY_TOPIC
+      ? new NtfySender({ topic: env.IPHONE_AGENT_NTFY_TOPIC })
+      : new ApnsSender({ keyId: env.APNS_KEY_ID, teamId: env.APNS_TEAM_ID,
+        topic: env.APNS_TOPIC, keyPath: env.APNS_KEY_PATH, environment: env.APNS_ENVIRONMENT }),
     adminToken: env.IPHONE_AGENT_ADMIN_TOKEN,
     pairingCode: env.IPHONE_AGENT_PAIR_CODE,
     manualMode: env.IPHONE_AGENT_MANUAL_MODE === '1',
