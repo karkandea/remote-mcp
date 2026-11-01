@@ -2,7 +2,9 @@
 
 Target: owner's iPhone 12 on cellular 5G, without a Mac/USB in **runtime**.
 
-**Status as of 2026-11-01:** Gateway tests pass (8/8), including the **ntfy** notification transport. The optional SwiftUI app compiles for Simulator and generic iPhone builds, but physical-device signing with Push Notifications was rejected because the available Apple identity is a **Personal Team**. No iPhone end-to-end notification/Shortcuts execution has passed yet. **Not production-ready or full iPhone UI control.**
+**Status as of 2026-11-01:** Gateway tests pass (8/8), and the new stateless notifier tests pass (3/3). The stateless notifier **actually sent a notification from the VPS to ntfy.sh (HTTP 2xx)** without a resident daemon. The optional SwiftUI app compiles for Simulator and generic iPhone builds, but physical-device signing with Push Notifications was rejected because the available Apple identity is a **Personal Team**. No iPhone end-to-end notification/Shortcuts execution has passed yet. **Not production-ready or full iPhone UI control.**
+
+**Preferred MVP:** [Stateless notifier](notify/README.md). It replaces the custom-app/APNs flow for an existing free Apple Personal Team; no always-on Node daemon, public reverse proxy, or additional iOS app to build. The more elaborate backend and native app remain optional R&D sources.
 
 ## Recommended path for the existing free Apple Personal Team: ntfy → Shortcuts
 
@@ -46,7 +48,7 @@ Configuration (provide as runtime secrets; **never commit actual values**):
 | `APNS_TOPIC` | Application bundle ID (`com.karkandea.iphoneagent`) |
 | `APNS_KEY_PATH` | Private Apple APNs `.p8` file stored only on VPS, outside repo |
 | `APNS_ENVIRONMENT` | `sandbox` for debug app, `production` for production signing |
-| `IPHONE_AGENT_NTFY_TOPIC` | Optional ntfy trigger-only mode; a cryptographically random 40–128 char topic name. If set, supersedes custom-app APNs mode. |
+| `IPHONE_AGENT_NTFY_TOPIC` | Optional ntfy trigger-only mode; a cryptographically random 40–64 char topic name. If set, supersedes custom-app APNs mode. |
 
 Run tests: `cd backend && npm test`.
 

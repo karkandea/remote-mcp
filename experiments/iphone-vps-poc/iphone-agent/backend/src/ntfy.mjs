@@ -11,7 +11,7 @@ export class NtfySender {
   }
 
   get configured() {
-    return typeof this.topic === 'string' && /^[a-zA-Z0-9_-]{40,128}$/.test(this.topic);
+    return typeof this.topic === 'string' && /^[a-zA-Z0-9_-]{40,64}$/.test(this.topic);
   }
 
   async send(_unusedDeviceToken, action) {

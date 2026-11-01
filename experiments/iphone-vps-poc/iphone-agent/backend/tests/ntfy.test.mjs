@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { NtfySender } from '../src/ntfy.mjs';
 import { createAgentServer } from '../src/server.mjs';
 
-const topic = 'iphoneagent_' + 'x'.repeat(64);
+const topic = 'iphoneagent_' + 'x'.repeat(52);
 
 test('ntfy sender validates topic, sends only safe action with no sensitive content', async () => {
   const sent = [];
