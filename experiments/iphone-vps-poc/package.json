@@ -1,0 +1,11 @@
+{
+  "name": "iphone-vps-poc",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "preflight": "node src/preflight.mjs",
+    "test": "node --test tests/*.test.mjs"
+  }
+}
