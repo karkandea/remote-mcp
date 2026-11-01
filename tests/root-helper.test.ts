@@ -75,3 +75,30 @@ test('proxy root tools connect only to a configured Unix socket',
     await helper.close();
   }
 });
+
+test('completed root jobs are evicted before history capacity blocks new commands',
+  { skip: process.platform !== 'linux' }, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'remote-mcp-root-history-'));
+  const socket = path.join(root, 'helper.sock');
+  const helper = await startRootHelper(socket, { requireRoot: false });
+  try {
+    let firstExecutionId = '';
+    for (let i = 0; i < 102; i++) {
+      const started = await callRootHelper(socket, { action: 'start',
+        argv: [process.execPath, '-e', ''], cwd: root, timeoutMs: 5000 }) as { executionId: string };
+      if (i === 0) firstExecutionId = started.executionId;
+      let result: { status: string } | undefined;
+      for (let attempt = 0; attempt < 100; attempt++) {
+        result = await callRootHelper(socket, { action: 'poll', executionId: started.executionId }) as typeof result;
+        if (result?.status !== 'running') break;
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      assert.equal(result?.status, 'completed', `command ${i + 1} should finish`);
+    }
+    const status = await callRootHelper(socket, { action: 'status' }) as { retainedJobs: number; retainedJobsLimit: number };
+    assert.equal(status.retainedJobs, 100);
+    assert.equal(status.retainedJobsLimit, 100);
+    await assert.rejects(callRootHelper(socket, { action: 'poll', executionId: firstExecutionId }),
+      /Unknown root execution/);
+  } finally { await helper.close(); }
+});
