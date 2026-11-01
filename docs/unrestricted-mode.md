@@ -19,6 +19,10 @@ After a staging test and a verified backup/rollback plan, an administrator can i
 
 `vps_root_exec` executes an argument array as UID 0 with `shell: false`; the caller can explicitly invoke a shell via `['/bin/sh','-c','...']`. Use `vps_root_poll` and `vps_root_cancel` to manage jobs. Jobs have a maximum 5-minute runtime, two concurrent commands and 64 KiB combined output; these are operational bounds, **not permission restrictions**. The Unix socket never accepts external network connections. The helper logs metadata to journald (start/exit/cancel and random execution ID) without command arguments or output.
 
+The helper retains at most 100 recent executions for polling. New releases evict the oldest *finished* executions when history fills; running jobs are never evicted. `vps_root_status` includes `retainedJobs` and `retainedJobsLimit` to help distinguish a healthy socket from an exhausted history. Evicted execution IDs can no longer be polled.
+
+If `vps_root_status` works but even `/bin/true` fails with `INTERNAL_ERROR`, first inspect local diagnostics: `sudo journalctl -u remote-mcp-root-helper.service -n 80 --no-pager` and `sudo systemctl status remote-mcp-root-helper.service --no-pager`. Older releases could exhaust a fixed 100-job history and reject every later start while still reporting `enabled: true`. **Confirm `activeJobs: 0` and keep a copy of the diagnostics before recovery.** A targeted `sudo systemctl restart remote-mcp-root-helper.service` clears in-memory history and invalidates old execution IDs; it does not restart the relay, Nginx, or application services. Test a harmless command through MCP afterward. If failure persists, inspect the socket ownership/mode and service logs instead of repeatedly restarting or modifying unrelated apps.
+
 ## Minimum ongoing safety and recovery requirements
 
 - Verify a restorable off-VPS backup of files, app secrets, databases, and critical config; record a rollback to the existing non-root relay service.
