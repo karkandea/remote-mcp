@@ -30,6 +30,7 @@ type RootJob = {
 
 const MAX_WIRE_BYTES = 131_072;
 const MAX_OUTPUT_BYTES = 65_536;
+const MAX_RETAINED_JOBS = 100;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Unknown helper error';
@@ -63,9 +64,20 @@ export async function startRootHelper(socketPath: string, options: { requireRoot
   if (!path.isAbsolute(socketPath)) throw new Error('Root socket path must be absolute');
   const jobs = new Map<string, RootJob>();
 
+  function pruneFinishedJobs(): void {
+    // Retain recent results for polling, but never let historical commands
+    // permanently prevent new executions on a long-running helper.
+    if (jobs.size < MAX_RETAINED_JOBS) return;
+    for (const [id, job] of jobs) {
+      if (job.status !== 'running') jobs.delete(id);
+      if (jobs.size < MAX_RETAINED_JOBS) return;
+    }
+  }
+
   function handle(request: RootOperation): unknown {
     if (request.action === 'status') return { enabled: true, privileged: process.getuid?.() === 0,
-      activeJobs: [...jobs.values()].filter(job => job.status === 'running').length };
+      activeJobs: [...jobs.values()].filter(job => job.status === 'running').length,
+      retainedJobs: jobs.size, retainedJobsLimit: MAX_RETAINED_JOBS };
     if (request.action === 'poll' || request.action === 'cancel') {
       const job = jobs.get(request.executionId);
       if (!job) throw new Error('Unknown root execution ID');
@@ -74,7 +86,8 @@ export async function startRootHelper(socketPath: string, options: { requireRoot
         status: job.status, exitCode: job.exitCode, stdout: job.stdout,
         stderr: job.stderr, truncated: job.truncated };
     }
-    if (jobs.size >= 100) throw new Error('Root job history full; restart the helper to clear it');
+    pruneFinishedJobs();
+    if (jobs.size >= MAX_RETAINED_JOBS) throw new Error('Root job history full; no completed jobs can be evicted');
     if ([...jobs.values()].filter(job => job.status === 'running').length >= 2) {
       throw new Error('At most two root commands may run concurrently');
     }
