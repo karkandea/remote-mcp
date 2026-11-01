@@ -3,6 +3,7 @@ import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { CallToolResult } from '@modelcontextprotocol/server';
 import WebSocket, { WebSocketServer } from 'ws';
+import { monitorWebSocketHeartbeat } from './websocket-heartbeat.js';
 
 export const MAX_FRAME_BYTES = 1_048_576;
 const MAX_PENDING = 16;
@@ -50,6 +51,7 @@ export class RelayChannel {
     });
     socket.on('close', () => this.detach(socket));
     socket.on('error', () => this.detach(socket));
+    monitorWebSocketHeartbeat(socket);
     return true;
   }
 

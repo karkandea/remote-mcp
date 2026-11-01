@@ -104,8 +104,12 @@ test('OAuth gate blocks anonymous callers; MCP request crosses VPS channel and r
 
     let ready!: () => void;
     const connected = new Promise<void>(resolve => { ready = resolve; });
+    let readyAgain!: () => void;
+    const reconnected = new Promise<void>(resolve => { readyAgain = resolve; });
+    let connectionCount = 0;
     agentPromise = runRemoteAgent(configSchema.parse({ allowedRoots: [root] }), {
-      url: `ws://127.0.0.1:${relay.port}/agent/ws`, token: secret, signal: abort.signal, onConnect: ready,
+      url: `ws://127.0.0.1:${relay.port}/agent/ws`, token: secret, signal: abort.signal,
+      onConnect: () => { if (++connectionCount === 1) ready(); else readyAgain(); },
     });
     await Promise.race([connected, new Promise((_, reject) => setTimeout(() => reject(new Error('Agent connection timeout')), 5000))]);
     assert.equal(relay.channel.connected, true);
@@ -119,6 +123,13 @@ test('OAuth gate blocks anonymous callers; MCP request crosses VPS channel and r
       path: file, expectedText: 'actual', replacementText: 'changed',
     } });
     assert.equal(writes.isError, true);
+    // A healthy Mac agent must reconnect after the VPS closes its socket.
+    relay.channel.close();
+    await Promise.race([reconnected,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Agent reconnect timeout')), 5000))]);
+    assert.equal(relay.channel.connected, true);
+    const afterReconnect = await client.callTool({ name: 'fs_read', arguments: { path: file } });
+    assert.equal(afterReconnect.isError, undefined);
     abort.abort();
     await agentPromise;
     for (let attempt = 0; attempt < 100 && relay.channel.connected; attempt++) {

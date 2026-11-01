@@ -6,6 +6,7 @@ import type { AgentConfig } from './config.js';
 import { AgentError } from './errors.js';
 import { MAX_FRAME_BYTES, toolUnavailable, type RelayCall, type RelayReply } from './relay-channel.js';
 import { createContext, createServer } from './server.js';
+import { monitorWebSocketHeartbeat } from './websocket-heartbeat.js';
 
 export type AgentConnectionOptions = { url: string; token: string; signal?: AbortSignal; onConnect?: () => void };
 
@@ -44,7 +45,10 @@ export async function runRemoteAgent(config: AgentConfig, options: AgentConnecti
         let active = 0;
         const abort = () => ws.terminate();
         options.signal?.addEventListener('abort', abort, { once: true });
-        ws.on('open', () => options.onConnect?.());
+        ws.on('open', () => {
+          monitorWebSocketHeartbeat(ws);
+          options.onConnect?.();
+        });
         ws.on('message', async (data, isBinary) => {
           if (isBinary) { ws.close(1003, 'Text frames only'); return; }
           let call: RelayCall;
