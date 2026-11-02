@@ -49,6 +49,9 @@ test('OAuth gate blocks anonymous callers; MCP request crosses VPS channel and r
   let agentPromise: Promise<void> | undefined;
   const client = new Client({ name: 'http-relay-test', version: '0.1.0' });
   try {
+    const healthBeforeAgent = await fetch(`${base}/healthz`);
+    assert.equal(healthBeforeAgent.status, 200);
+    assert.deepEqual(await healthBeforeAgent.json(), { ok: true, agentConnected: false });
     const metadata = await fetch(`${base}/.well-known/oauth-protected-resource`);
     assert.equal(metadata.status, 200);
     assert.deepEqual((await metadata.json() as { authorization_servers: string[] }).authorization_servers,
@@ -113,6 +116,8 @@ test('OAuth gate blocks anonymous callers; MCP request crosses VPS channel and r
     });
     await Promise.race([connected, new Promise((_, reject) => setTimeout(() => reject(new Error('Agent connection timeout')), 5000))]);
     assert.equal(relay.channel.connected, true);
+    const healthWithAgent = await fetch(`${base}/healthz`);
+    assert.deepEqual(await healthWithAgent.json(), { ok: true, agentConnected: true });
     const read = await client.callTool({ name: 'fs_read', arguments: { path: file } });
     assert.equal(read.isError, undefined);
     assert.match(JSON.stringify(read.content), /actual Mac document through relay/);

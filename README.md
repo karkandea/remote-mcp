@@ -81,6 +81,7 @@ Tests use synthetic temporary directories, not personal repositories. The MCP te
 - [VPS-only CI policy](docs/vps-ci.md)
 - [Unrestricted Mode, high-risk opt-in (draft only)](docs/unrestricted-mode.md)
 - [Independent VPS CI runner deployment](ci/README.md)
+- [Operational hardening: release integrity gate and independent watchdog](docs/operations-hardening.md)
 - [Mac verification checkpoint](docs/verification-2026-10-31.md)
 - [Contributing](CONTRIBUTING.md)
 - [Changelog](CHANGELOG.md)

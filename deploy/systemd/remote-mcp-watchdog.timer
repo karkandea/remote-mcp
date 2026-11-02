@@ -1,0 +1,14 @@
+[Unit]
+Description=Run Remote MCP read-only watchdog every five minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+AccuracySec=30s
+RandomizedDelaySec=15s
+Persistent=true
+Unit=remote-mcp-watchdog.service
+
+[Install]
+WantedBy=timers.target
+
