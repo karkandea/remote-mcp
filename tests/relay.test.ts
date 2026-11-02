@@ -94,7 +94,8 @@ test('OAuth gate blocks anonymous callers; MCP request crosses VPS channel and r
       argv: ['/usr/bin/id'], cwd: '/tmp', timeoutMs: 1000,
     } });
     assert.equal(rootDenied.isError, true);
-    assert.match(JSON.stringify(rootDenied.content), /not enabled/);
+    assert.match(JSON.stringify(rootDenied.content), /disabled/);
+    assert.match(JSON.stringify(rootDenied.content), /ROOT_DISABLED/);
     const anonymousRoot = await fetch(`${base}/mcp`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'vps_root_exec',
@@ -104,6 +105,7 @@ test('OAuth gate blocks anonymous callers; MCP request crosses VPS channel and r
     const offline = await client.callTool({ name: 'fs_read', arguments: { path: file } });
     assert.equal(offline.isError, true);
     assert.match(JSON.stringify(offline.content), /offline/);
+    assert.match(JSON.stringify(offline.content), /MAC_OFFLINE/);
 
     let ready!: () => void;
     const connected = new Promise<void>(resolve => { ready = resolve; });

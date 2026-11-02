@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Independent, read-only VPS watchdog. It does not execute root commands or restart services.
-import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, rename, rm, statfs, writeFile } from 'node:fs/promises';
+// Independent, read-only VPS diagnostic probe. It never sends notifications,
+// executes root commands or restarts services.
+import { statfs } from 'node:fs/promises';
 import { createConnection } from 'node:net';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -21,10 +21,6 @@ export function watchdogConfig(env = process.env) {
       publicUrl.username || publicUrl.password || publicUrl.search || publicUrl.hash)) {
     throw new Error('Public check must be an HTTPS OAuth resource metadata URL');
   }
-  const webhookUrl = env.MCP_WATCHDOG_WEBHOOK_URL ? new URL(env.MCP_WATCHDOG_WEBHOOK_URL) : undefined;
-  if (webhookUrl && (webhookUrl.protocol !== 'https:' || webhookUrl.username || webhookUrl.password || webhookUrl.hash)) {
-    throw new Error('Webhook must be an HTTPS URL without URL credentials or fragment');
-  }
   const warnPercent = Number(env.MCP_WATCHDOG_DISK_WARN_PERCENT ?? 85);
   const criticalPercent = Number(env.MCP_WATCHDOG_DISK_CRITICAL_PERCENT ?? 90);
   if (!(warnPercent > 0 && warnPercent < criticalPercent && criticalPercent <= 100)) {
@@ -34,9 +30,7 @@ export function watchdogConfig(env = process.env) {
   if (rootSocket && rootSocket !== '/run/remote-mcp-root/exec.sock') {
     throw new Error('Root socket must use the fixed deployment path');
   }
-  const stateDir = env.MCP_WATCHDOG_STATE_DIR || '/var/lib/remote-mcp-watchdog';
-  if (!path.isAbsolute(stateDir)) throw new Error('State directory must be absolute');
-  return { relayUrl, publicUrl, webhookUrl, rootSocket, stateDir,
+  return { relayUrl, publicUrl, rootSocket,
     expectMac: bool(env.MCP_WATCHDOG_EXPECT_MAC), warnPercent, criticalPercent };
 }
 
@@ -112,35 +106,6 @@ export function evaluateHealth(snapshot, config) {
     agentConnected: snapshot.relay?.ok ? snapshot.relay.agentConnected : null };
 }
 
-export function shouldNotify(previous, current, nowMs) {
-  const fingerprint = current.issues.map(issue => issue.code).join(',') || 'healthy';
-  if (!previous && fingerprint === 'healthy') return false;
-  if (previous?.notifiedFingerprint !== fingerprint) return true;
-  return fingerprint !== 'healthy' && nowMs - (previous?.lastAlertAt ?? 0) >= 60 * 60 * 1000;
-}
-
-async function loadState(stateFile) {
-  try { return JSON.parse(await readFile(stateFile, 'utf8')); }
-  catch (error) { if (error?.code === 'ENOENT') return null; throw error; }
-}
-
-async function saveState(stateFile, payload) {
-  await mkdir(path.dirname(stateFile), { recursive: true, mode: 0o700 });
-  const temporary = `${stateFile}.${randomBytes(6).toString('hex')}.tmp`;
-  try {
-    await writeFile(temporary, JSON.stringify(payload) + '\n', { mode: 0o600, flag: 'wx' });
-    await rename(temporary, stateFile);
-  } finally { await rm(temporary, { force: true }); }
-}
-
-async function sendWebhook(url, current, timestamp) {
-  const response = await fetch(url, { method: 'POST', redirect: 'error',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ event: 'remote-mcp-watchdog', timestamp, ...current }),
-    signal: AbortSignal.timeout(5000) });
-  if (!response.ok) throw new Error('Alert endpoint rejected notification');
-}
-
 export async function runOnce(env = process.env, probes = {}) {
   const config = watchdogConfig(env);
   const [relay, root, disk, publicEndpoint] = await Promise.all([
@@ -150,25 +115,7 @@ export async function runOnce(env = process.env, probes = {}) {
     config.publicUrl ? (probes.public ?? (() => probeHttp(config.publicUrl)))() : undefined,
   ]);
   const current = evaluateHealth({ relay, root, disk, public: publicEndpoint }, config);
-  const stateFile = path.join(config.stateDir, 'last-check.json');
-  const previous = await loadState(stateFile);
   const timestamp = new Date().toISOString();
-  const nowMs = Date.now();
-  const fingerprint = current.issues.map(issue => issue.code).join(',') || 'healthy';
-  let notifiedFingerprint = previous?.notifiedFingerprint ?? (current.severity === 'healthy' ? 'healthy' : null);
-  let lastAlertAt = previous?.lastAlertAt ?? null;
-  if (shouldNotify(previous, current, nowMs)) {
-    try {
-      if (config.webhookUrl) await (probes.notify ?? sendWebhook)(config.webhookUrl, current, timestamp);
-      notifiedFingerprint = fingerprint;
-      lastAlertAt = nowMs;
-      process.stdout.write(JSON.stringify({ event: 'watchdog-alert', timestamp, ...current }) + '\n');
-    } catch {
-      process.stderr.write(JSON.stringify({ event: 'watchdog-alert-delivery-failed', timestamp,
-        severity: current.severity, codes: current.issues.map(issue => issue.code) }) + '\n');
-    }
-  }
-  await saveState(stateFile, { fingerprint, notifiedFingerprint, lastAlertAt, checkedAt: timestamp });
   process.stdout.write(JSON.stringify({ event: 'watchdog-check', timestamp, ...current }) + '\n');
   return current;
 }

@@ -4,6 +4,7 @@ import { AgentError, toResult } from './errors.js';
 import type { RelayChannel } from './relay-channel.js';
 import { auditVpsStorage } from './vps-storage.js';
 import { callRootHelper, type RootOperation } from './root-helper.js';
+import { toRootResult } from './root-errors.js';
 
 /** Mac tool requests cross the agent channel; VPS inventory is read locally by the relay. */
 export function createProxyServer(channel: RelayChannel, storageAudit: () => Promise<unknown> = auditVpsStorage,
@@ -27,7 +28,7 @@ export function createProxyServer(channel: RelayChannel, storageAudit: () => Pro
         text: JSON.stringify({ ok: true, data: await callRootHelper(rootHelperSocket, operation) }) }] };
     } catch (error) {
       return { isError: true, content: [{ type: 'text' as const,
-        text: JSON.stringify({ ok: false, error: toResult(error) }) }] };
+        text: JSON.stringify({ ok: false, error: toRootResult(error) }) }] };
     }
   }
   server.registerTool('vps_root_status', { ...auth,

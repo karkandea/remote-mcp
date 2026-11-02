@@ -21,9 +21,15 @@ Release only from a **reviewed, clean, pinned commit**, including the completed-
 
 The manifest is an **integrity and operator error gate**, not a signature or proof that the compiler was trustworthy. It never restarts services or modifies `/opt` itself. A compromised operator can generate a new manifest, so review and commit provenance remain necessary.
 
-## 2. Independent watchdog
+## 2. On-demand errors and optional local diagnostic history
 
-`ops/watchdog.mjs` uses Node built-ins and runs as a short-lived process under a **separate systemd timer**. It does not depend on the relay process being healthy. It probes:
+When an agent calls a root or Mac tool and it fails, MCP returns a bounded structured error containing `code`, `message`, and `nextStep`. Recognized conditions include `ROOT_HISTORY_FULL`, `ROOT_BUSY`, `ROOT_SOCKET_UNAVAILABLE`, `ROOT_EXECUTION_EXPIRED`, `ROOT_RESPONSE_TIMEOUT`, `MAC_OFFLINE`, `MAC_RESPONSE_TIMEOUT`, and `RELAY_BUSY`. The advice discourages blind retries of privileged or non-idempotent actions. Unknown internal errors are redacted; their stack traces, arguments and secret paths are not returned.
+
+If the **entire relay service** is unreachable, MCP cannot return a structured tool result; the host/client reports a connection failure. Check the targeted service using an independent SSH or console path in that case.
+
+The optional `ops/watchdog.mjs` is an independent read-only local diagnostic probe. It produces JSON records in journald on a five-minute systemd timer if installed. It **does not notify Arkan** and has no webhook or Telegram integration. The history may help diagnose an issue after an agent reports failure.
+
+The probe uses Node built-ins and does not depend on the relay process being healthy. It checks:
 
 - Local `http://127.0.0.1:3417/healthz` (now includes `agentConnected`); the Nginx vhost must continue blocking public access to this local route.
 - Root helper's **read-only** Unix-socket `status` operation, but only if explicitly configured.
@@ -31,7 +37,7 @@ The manifest is an **integrity and operator error gate**, not a signature or pro
 - Optionally, public HTTPS OAuth resource discovery to detect Nginx/DNS/TLS outage.
 - Optionally, Mac agent availability. Off by default because a laptop may intentionally sleep or be powered off.
 
-It records bounded JSON health events in journald and deduplicates notifications by issue code. A transition to degraded/recovered sends one alert, with an hourly reminder while degraded. A failed webhook delivery is retried on the next check. Only approved, minimal health metadata is sent; no command arguments, OAuth tokens, or file contents. The watchdog **never** executes root commands, restarts any service, or deletes data. systemd's existing relay/helper restart policies remain the first crash-recovery mechanism.
+It records bounded JSON status metadata locally without command arguments, OAuth tokens or file contents. It **never** executes root commands, restarts services, sends external notifications or deletes data. systemd's existing relay/helper restart policies remain the first crash-recovery mechanism.
 
 ### Review-only configuration example
 
@@ -43,24 +49,18 @@ MCP_WATCHDOG_PUBLIC_URL=https://mcp.dualangka.com/.well-known/oauth-protected-re
 MCP_WATCHDOG_DISK_WARN_PERCENT=85
 MCP_WATCHDOG_DISK_CRITICAL_PERCENT=90
 MCP_WATCHDOG_EXPECT_MAC=0
-# Optional: an operator-controlled HTTPS receiver that accepts a JSON POST.
-# Without this, alerts go only to local journald (no external notification).
-# MCP_WATCHDOG_WEBHOOK_URL=https://YOUR-ALERT-RECEIVER.example/remote-mcp
 ```
-
-The optional webhook receives `{event,timestamp,severity,issues,diskUsedPercent,diskAvailableBytes,rootActiveJobs,agentConnected}`. Configure a receiver that understands this JSON shape; a generic Slack/Telegram webhook is **not automatically compatible**. Keep its URL out of logs and source control. An alert destination has not been chosen or provisioned.
 
 ### Activation gates (do not execute until separately approved)
 
 1. Build and stage the reviewed release and manifest. Confirm that the existing relay health route is still inaccessible publicly, and privately check local `/healthz` shape.
-2. Ensure the `remote-mcp` service account has only its intended access to the root-helper socket and state directory; never grant additional sudo or root privileges.
+2. Ensure the `remote-mcp` service account has only its intended access to the root-helper socket; never grant additional sudo or root privileges.
 3. Install `deploy/systemd/remote-mcp-watchdog.service` and `.timer` as root-owned units; install the new script from the same verified commit. Do not change existing relay or root-helper units.
-4. Run a single read-only watchdog one-shot, inspect `journalctl -u remote-mcp-watchdog.service`, then enable **only** its timer. Confirm disk 85% warning and actual webhook delivery with a safe synthetic receiver before calling notifications live.
+4. Run a single read-only diagnostic one-shot, inspect `journalctl -u remote-mcp-watchdog.service`, then enable **only** its timer if local history is desired. Confirm the 85% disk warning remains local to journald.
 5. Test relay-offline and Mac-offline scenarios on staging; inspect `systemctl list-timers`, and document operator disable/rollback commands for the watchdog timer.
 
 ### Known limits
 
-- A watchdog on the same VPS cannot alert when the **entire VPS or its network is down**; add a separate external uptime probe for that failure mode.
-- Without a configured and tested webhook, issues are detectable in journald but **not pushed to Arkan**.
+- A local watchdog cannot report the **entire VPS or network being down** to an agent while the server is unreachable. There are deliberately no push notifications; the owner learns about failures when an agent invokes a tool or investigates separately.
 - An active helper socket does not guarantee arbitrary root commands will succeed. The historical 100-job lockout is guarded by the release manifest, test suite, and live status probe; a separate synthetic root exec/poll smoke test remains part of each deployment acceptance check.
 - This watchdog intentionally does **not** clean a crowded production disk, expose credentials, auto-restart the helper with active jobs, or alter business applications.
