@@ -104,7 +104,10 @@ export async function startRelayServer(config: RelayConfig,
           authorization_servers: [config.authIssuer], scopes_supported: ['mcp:tools'], bearer_methods_supported: ['header'] });
         return;
       }
-      if (req.method === 'GET' && pathname === '/healthz') { json(res, 200, { ok: true }); return; }
+      // Local-only diagnostic; the production Nginx vhost does not proxy /healthz.
+      if (req.method === 'GET' && pathname === '/healthz') {
+        json(res, 200, { ok: true, agentConnected: channel.connected }); return;
+      }
       if (pathname !== '/mcp') { json(res, 404, { error: 'not_found' }); return; }
       if (req.method !== 'POST') { json(res, 405, { error: 'method_not_allowed' }); return; }
       if (req.headers.origin) { json(res, 403, { error: 'origin_not_allowed' }); return; }

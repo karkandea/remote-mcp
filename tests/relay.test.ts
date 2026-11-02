@@ -49,6 +49,9 @@ test('OAuth gate blocks anonymous callers; MCP request crosses VPS channel and r
   let agentPromise: Promise<void> | undefined;
   const client = new Client({ name: 'http-relay-test', version: '0.1.0' });
   try {
+    const healthBeforeAgent = await fetch(`${base}/healthz`);
+    assert.equal(healthBeforeAgent.status, 200);
+    assert.deepEqual(await healthBeforeAgent.json(), { ok: true, agentConnected: false });
     const metadata = await fetch(`${base}/.well-known/oauth-protected-resource`);
     assert.equal(metadata.status, 200);
     assert.deepEqual((await metadata.json() as { authorization_servers: string[] }).authorization_servers,
@@ -79,19 +82,35 @@ test('OAuth gate blocks anonymous callers; MCP request crosses VPS channel and r
       { authProvider: { token: async () => 'authorized-test-token' } });
     await client.connect(transport);
     const listed = await client.listTools();
-    assert.equal(listed.tools.length, 37);
+    assert.equal(listed.tools.length, 38);
+    const diagnosticsTool = listed.tools.find(tool => tool.name === 'mcp_diagnostics');
+    assert.equal(diagnosticsTool?.annotations?.readOnlyHint, true);
+    assert.match(diagnosticsTool?.description ?? '', /unprivileged/);
     assert.ok(listed.tools.some(tool => tool.name === 'vps_storage_audit'));
     assert.ok(listed.tools.some(tool => tool.name === 'iphone_screenshot'));
     assert.ok(listed.tools.some(tool => tool.name === 'mac_user_exec'));
     assert.ok(listed.tools.some(tool => tool.name === 'vps_root_exec'));
+    assert.match(listed.tools.find(tool => tool.name === 'vps_root_exec')?.description ?? '', /ChatGPT may block risky actions/);
+    assert.match(listed.tools.find(tool => tool.name === 'mac_user_exec')?.description ?? '', /ChatGPT may block risky actions/);
     const audit = await client.callTool({ name: 'vps_storage_audit', arguments: {} });
     assert.equal(audit.isError, undefined);
     assert.match(JSON.stringify(audit.content), /test-vps/);
+    const diagnostics = await client.callTool({ name: 'mcp_diagnostics', arguments: {} });
+    assert.equal(diagnostics.isError, undefined);
+    const diagnosticsData = JSON.parse((diagnostics.content[0] as { text: string }).text) as {
+      data: { mac: { agentConnected: boolean }; rootExecutor: { healthProbed: boolean };
+        vpsDisk: { usedPercent: number }; readOnly: boolean; hostSafety: string } };
+    assert.equal(diagnosticsData.data.mac.agentConnected, false);
+    assert.equal(diagnosticsData.data.rootExecutor.healthProbed, false);
+    assert.equal(diagnosticsData.data.readOnly, true);
+    assert.ok(diagnosticsData.data.vpsDisk.usedPercent >= 0);
+    assert.match(diagnosticsData.data.hostSafety, /cannot approve or override/);
     const rootDenied = await client.callTool({ name: 'vps_root_exec', arguments: {
       argv: ['/usr/bin/id'], cwd: '/tmp', timeoutMs: 1000,
     } });
     assert.equal(rootDenied.isError, true);
-    assert.match(JSON.stringify(rootDenied.content), /not enabled/);
+    assert.match(JSON.stringify(rootDenied.content), /disabled/);
+    assert.match(JSON.stringify(rootDenied.content), /ROOT_DISABLED/);
     const anonymousRoot = await fetch(`${base}/mcp`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'vps_root_exec',
@@ -101,6 +120,7 @@ test('OAuth gate blocks anonymous callers; MCP request crosses VPS channel and r
     const offline = await client.callTool({ name: 'fs_read', arguments: { path: file } });
     assert.equal(offline.isError, true);
     assert.match(JSON.stringify(offline.content), /offline/);
+    assert.match(JSON.stringify(offline.content), /MAC_OFFLINE/);
 
     let ready!: () => void;
     const connected = new Promise<void>(resolve => { ready = resolve; });
@@ -113,6 +133,12 @@ test('OAuth gate blocks anonymous callers; MCP request crosses VPS channel and r
     });
     await Promise.race([connected, new Promise((_, reject) => setTimeout(() => reject(new Error('Agent connection timeout')), 5000))]);
     assert.equal(relay.channel.connected, true);
+    const connectedDiagnostics = await client.callTool({ name: 'mcp_diagnostics', arguments: {} });
+    const connectedData = JSON.parse((connectedDiagnostics.content[0] as { text: string }).text) as {
+      data: { mac: { agentConnected: boolean } } };
+    assert.equal(connectedData.data.mac.agentConnected, true);
+    const healthWithAgent = await fetch(`${base}/healthz`);
+    assert.deepEqual(await healthWithAgent.json(), { ok: true, agentConnected: true });
     const read = await client.callTool({ name: 'fs_read', arguments: { path: file } });
     assert.equal(read.isError, undefined);
     assert.match(JSON.stringify(read.content), /actual Mac document through relay/);

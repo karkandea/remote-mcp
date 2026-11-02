@@ -20,7 +20,28 @@ export function safeTokenEqual(actual: string | undefined, expected: string): bo
 }
 
 export function toolUnavailable(message: string): CallToolResult {
-  return { isError: true, content: [{ type: 'text', text: JSON.stringify({ ok: false, error: { code: 'RELAY_UNAVAILABLE', message } }) }] };
+  const diagnostics: Record<string, { code: string; nextStep: string }> = {
+    'Mac agent is offline': { code: 'MAC_OFFLINE',
+      nextStep: 'Check whether the Mac is powered on, awake and logged in. The agent should reconnect automatically when network access returns.' },
+    'Mac agent disconnected': { code: 'MAC_DISCONNECTED',
+      nextStep: 'Wait for reconnect, then check device_status before repeating an operation that might have changed state.' },
+    'Too many concurrent tool requests': { code: 'RELAY_BUSY',
+      nextStep: 'Wait for in-flight operations to complete; retry with lower concurrency.' },
+    'Request exceeds relay limit': { code: 'RELAY_REQUEST_TOO_LARGE',
+      nextStep: 'Reduce the request payload without expanding device permissions.' },
+    'Mac agent response timed out': { code: 'MAC_RESPONSE_TIMEOUT',
+      nextStep: 'Check device_status and inspect whether the operation took effect before retrying.' },
+    'Agent transport error': { code: 'RELAY_TRANSPORT_ERROR',
+      nextStep: 'Wait for agent reconnection; avoid blindly repeating writes or commands.' },
+    'Agent is busy': { code: 'MAC_BUSY',
+      nextStep: 'Wait for active Mac operations, then retry with reduced concurrency.' },
+    'Local tool invocation failed': { code: 'MAC_TOOL_FAILED',
+      nextStep: 'Check device_status and local agent diagnostics; avoid blind retries of destructive operations.' },
+  };
+  const detail = diagnostics[message] ?? { code: 'RELAY_UNAVAILABLE',
+    nextStep: 'Check relay and agent status before retrying.' };
+  return { isError: true, content: [{ type: 'text', text: JSON.stringify({ ok: false,
+    error: { code: detail.code, message, nextStep: detail.nextStep } }) }] };
 }
 
 /** The VPS never sees local paths or executes commands except as bounded MCP tool arguments. */

@@ -1,0 +1,32 @@
+[Unit]
+Description=Remote MCP read-only independent watchdog (relay, root socket, disk)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=remote-mcp
+Group=remote-mcp
+WorkingDirectory=/opt/remote-mcp
+EnvironmentFile=-/etc/remote-mcp/watchdog.env
+ExecStart=/usr/bin/node /opt/remote-mcp/ops/watchdog.mjs
+UMask=0077
+TimeoutStartSec=30s
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+MemoryMax=96M
+TasksMax=16
+CPUQuota=20%
+StandardOutput=journal
+StandardError=journal
+

@@ -4,12 +4,25 @@ import { AgentError, toResult } from './errors.js';
 import type { RelayChannel } from './relay-channel.js';
 import { auditVpsStorage } from './vps-storage.js';
 import { callRootHelper, type RootOperation } from './root-helper.js';
+import { toRootResult } from './root-errors.js';
+import { collectMcpDiagnostics } from './mcp-diagnostics.js';
 
 /** Mac tool requests cross the agent channel; VPS inventory is read locally by the relay. */
 export function createProxyServer(channel: RelayChannel, storageAudit: () => Promise<unknown> = auditVpsStorage,
   rootHelperSocket?: string): McpServer {
   const server = new McpServer({ name: 'remote-mcp-relay', version: '0.1.0-alpha.1' });
   const auth = { _meta: { securitySchemes: [{ type: 'oauth2', scopes: ['mcp:tools'] }] } };
+  server.registerTool('mcp_diagnostics', { ...auth,
+    description: 'Read-only, unprivileged MCP relay preflight: relay uptime, Mac agent connection, VPS disk capacity and safe tool selection. Never runs commands, checks root access, changes networking, or modifies production.',
+    annotations: { readOnlyHint: true }, inputSchema: z.object({}) }, async () => {
+      try {
+        const data = await collectMcpDiagnostics(channel.connected, Boolean(rootHelperSocket));
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ ok: true, data }) }] };
+      } catch (error) {
+        return { isError: true, content: [{ type: 'text' as const,
+          text: JSON.stringify({ ok: false, error: toResult(error) }) }] };
+      }
+    });
   server.registerTool('vps_storage_audit', { ...auth,
     description: 'Read-only disk-space inventory on the always-on Linux VPS relay: fixed directories, Docker summary and journal usage. No delete or arbitrary commands.',
     annotations: { readOnlyHint: true }, inputSchema: z.object({}) }, async () => {
@@ -27,14 +40,14 @@ export function createProxyServer(channel: RelayChannel, storageAudit: () => Pro
         text: JSON.stringify({ ok: true, data: await callRootHelper(rootHelperSocket, operation) }) }] };
     } catch (error) {
       return { isError: true, content: [{ type: 'text' as const,
-        text: JSON.stringify({ ok: false, error: toResult(error) }) }] };
+        text: JSON.stringify({ ok: false, error: toRootResult(error) }) }] };
     }
   }
   server.registerTool('vps_root_status', { ...auth,
-    description: 'Check whether the owner-enabled, high-risk VPS root executor is available (no elevated action)',
+    description: 'Read-only status and job counters of the separately owner-enabled VPS root helper. Does not execute, start, or cancel commands.',
     annotations: { readOnlyHint: true }, inputSchema: z.object({}) }, () => rootCall({ action: 'status' }));
   server.registerTool('vps_root_exec', { ...auth,
-    description: 'HIGH RISK: execute arbitrary argv as root on the VPS, with full filesystem and OS control. Use vps_root_poll for output. Only works when the separate root helper has been intentionally enabled.',
+    description: 'HIGH RISK: execute arbitrary argv as root on the VPS, with full filesystem and OS control. Prefer vps_root_status and vps_storage_audit for read-only checks. ChatGPT may block risky actions independently of VPS permissions; do not retry via alternate tools to evade a refusal. Use vps_root_poll for output. Requires intentional root-helper enablement.',
     annotations: { destructiveHint: true }, inputSchema: z.object({
       argv: z.array(z.string().max(4000)).min(1).max(64), cwd: z.string().min(1).max(4096),
       timeoutMs: z.number().int().min(100).max(300_000).default(30_000),
@@ -89,7 +102,7 @@ export function createProxyServer(channel: RelayChannel, storageAudit: () => Pro
   }
   server.registerTool('terminal_start', { ...auth, description: 'Run a locally approved exact command profile (no shell)',
     inputSchema: z.object({ profile: z.string() }) }, args => channel.call('terminal_start', args));
-  server.registerTool('mac_user_exec', { ...auth, description: 'Execute arbitrary argv with Mac login-user privileges after the owner locally enables fullUserMode; use terminal_poll for output',
+  server.registerTool('mac_user_exec', { ...auth, description: 'HIGH RISK: execute arbitrary argv with Mac login-user privileges after owner opt-in. Prefer fs, process, system, and fixed terminal profile tools for their scoped tasks. ChatGPT may block risky actions independently of Mac permissions; do not repackage the same action to evade a refusal. Use terminal_poll for output.',
     annotations: { destructiveHint: true }, inputSchema: z.object({ argv: z.array(z.string().max(4000)).min(1).max(64), cwd: z.string().min(1).max(4096),
       timeoutMs: z.number().int().min(100).max(300_000).default(30_000) }) }, args => channel.call('mac_user_exec', args));
   server.registerTool('terminal_poll', { ...auth, description: 'Read bounded output for a local execution',
