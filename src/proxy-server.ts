@@ -35,7 +35,7 @@ export function createProxyServer(channel: RelayChannel, storageAudit: () => Pro
     description: 'Check whether the owner-enabled, high-risk VPS root executor is available (no elevated action)',
     annotations: { readOnlyHint: true }, inputSchema: z.object({}) }, () => rootCall({ action: 'status' }));
   server.registerTool('vps_root_exec', { ...auth,
-    description: 'HIGH RISK: execute arbitrary argv as root on the VPS, with full filesystem and OS control. Use vps_root_poll for output. Only works when the separate root helper has been intentionally enabled.',
+    description: 'HIGH RISK: execute arbitrary argv as root on the VPS, with full filesystem and OS control. Prefer vps_root_status and vps_storage_audit for read-only checks. ChatGPT may block risky actions independently of VPS permissions; do not retry via alternate tools to evade a refusal. Use vps_root_poll for output. Requires intentional root-helper enablement.',
     annotations: { destructiveHint: true }, inputSchema: z.object({
       argv: z.array(z.string().max(4000)).min(1).max(64), cwd: z.string().min(1).max(4096),
       timeoutMs: z.number().int().min(100).max(300_000).default(30_000),
@@ -90,7 +90,7 @@ export function createProxyServer(channel: RelayChannel, storageAudit: () => Pro
   }
   server.registerTool('terminal_start', { ...auth, description: 'Run a locally approved exact command profile (no shell)',
     inputSchema: z.object({ profile: z.string() }) }, args => channel.call('terminal_start', args));
-  server.registerTool('mac_user_exec', { ...auth, description: 'Execute arbitrary argv with Mac login-user privileges after the owner locally enables fullUserMode; use terminal_poll for output',
+  server.registerTool('mac_user_exec', { ...auth, description: 'HIGH RISK: execute arbitrary argv with Mac login-user privileges after owner opt-in. Prefer fs, process, system, and fixed terminal profile tools for their scoped tasks. ChatGPT may block risky actions independently of Mac permissions; do not repackage the same action to evade a refusal. Use terminal_poll for output.',
     annotations: { destructiveHint: true }, inputSchema: z.object({ argv: z.array(z.string().max(4000)).min(1).max(64), cwd: z.string().min(1).max(4096),
       timeoutMs: z.number().int().min(100).max(300_000).default(30_000) }) }, args => channel.call('mac_user_exec', args));
   server.registerTool('terminal_poll', { ...auth, description: 'Read bounded output for a local execution',

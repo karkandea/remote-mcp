@@ -27,6 +27,14 @@ When an agent calls a root or Mac tool and it fails, MCP returns a bounded struc
 
 If the **entire relay service** is unreachable, MCP cannot return a structured tool result; the host/client reports a connection failure. Check the targeted service using an independent SSH or console path in that case.
 
+### ChatGPT host-level refusals are separate from MCP failures
+
+ChatGPT may require confirmation for a tool action or block a particularly risky action before the request reaches MCP, even if the Mac/VPS has enabled the executor. This is a **host decision**, not a VPS firewall or Unix-socket failure. No MCP or VPS setting can override it. See [OpenAI's custom MCP connection guidance](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt).
+
+Use genuinely narrower tools when they fit the task: `vps_root_status`, `vps_storage_audit`, `system_status`, `fs_read`, `process_info`, or an explicitly approved `terminal_start` profile. Arbitrary `vps_root_exec` and `mac_user_exec` remain honestly marked high risk. If a particular action is denied by ChatGPT, stop and request an authorized alternative or user guidance; never relabel, split, or disguise that same action to bypass the denial.
+
+An MCP tool cannot report its own structured error if ChatGPT blocks invocation *before* it reaches the server. The host's refusal is the diagnostic in that case.
+
 The optional `ops/watchdog.mjs` is an independent read-only local diagnostic probe. It produces JSON records in journald on a five-minute systemd timer if installed. It **does not notify Arkan** and has no webhook or Telegram integration. The history may help diagnose an issue after an agent reports failure.
 
 The probe uses Node built-ins and does not depend on the relay process being healthy. It checks:

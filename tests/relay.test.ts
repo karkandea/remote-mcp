@@ -87,6 +87,8 @@ test('OAuth gate blocks anonymous callers; MCP request crosses VPS channel and r
     assert.ok(listed.tools.some(tool => tool.name === 'iphone_screenshot'));
     assert.ok(listed.tools.some(tool => tool.name === 'mac_user_exec'));
     assert.ok(listed.tools.some(tool => tool.name === 'vps_root_exec'));
+    assert.match(listed.tools.find(tool => tool.name === 'vps_root_exec')?.description ?? '', /ChatGPT may block risky actions/);
+    assert.match(listed.tools.find(tool => tool.name === 'mac_user_exec')?.description ?? '', /ChatGPT may block risky actions/);
     const audit = await client.callTool({ name: 'vps_storage_audit', arguments: {} });
     assert.equal(audit.isError, undefined);
     assert.match(JSON.stringify(audit.content), /test-vps/);
