@@ -54,6 +54,8 @@ The `stop` command does not independently kill a host-owned stdio process; the h
 | `terminal_start`, `terminal_poll`, `terminal_cancel` | Only exact owner-configured command profiles; no arbitrary shell strings |
 | `device_info`, `device_status`, `device_disconnect` | Local status, persisted disconnect marker |
 
+The authenticated VPS relay additionally exposes `mcp_diagnostics`, an unprivileged, read-only preflight for relay uptime, outbound Mac connectivity, and disk capacity. It cannot authorize a blocked ChatGPT call, diagnose an individual blocked command, check privileged helper health, or perform production changes. See [Operational hardening](docs/operations-hardening.md) for safe-tool selection and the release gate.
+
 The terminal tool takes a **profile name**, not a shell script. For example, the `sample-tests` profile in the configuration invokes exactly `/usr/bin/true` in the sample directory. To allow project tests, a user must consciously add a command profile with an executable, fixed arguments, and an authorized working directory. Those commands are still capable of reading or writing outside approved roots when the operating system permits it. Never configure a broad shell profile, unreviewed scripts, or production credentials.
 
 ## Connect with MCP clients

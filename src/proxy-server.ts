@@ -5,12 +5,24 @@ import type { RelayChannel } from './relay-channel.js';
 import { auditVpsStorage } from './vps-storage.js';
 import { callRootHelper, type RootOperation } from './root-helper.js';
 import { toRootResult } from './root-errors.js';
+import { collectMcpDiagnostics } from './mcp-diagnostics.js';
 
 /** Mac tool requests cross the agent channel; VPS inventory is read locally by the relay. */
 export function createProxyServer(channel: RelayChannel, storageAudit: () => Promise<unknown> = auditVpsStorage,
   rootHelperSocket?: string): McpServer {
   const server = new McpServer({ name: 'remote-mcp-relay', version: '0.1.0-alpha.1' });
   const auth = { _meta: { securitySchemes: [{ type: 'oauth2', scopes: ['mcp:tools'] }] } };
+  server.registerTool('mcp_diagnostics', { ...auth,
+    description: 'Read-only, unprivileged MCP relay preflight: relay uptime, Mac agent connection, VPS disk capacity and safe tool selection. Never runs commands, checks root access, changes networking, or modifies production.',
+    annotations: { readOnlyHint: true }, inputSchema: z.object({}) }, async () => {
+      try {
+        const data = await collectMcpDiagnostics(channel.connected, Boolean(rootHelperSocket));
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ ok: true, data }) }] };
+      } catch (error) {
+        return { isError: true, content: [{ type: 'text' as const,
+          text: JSON.stringify({ ok: false, error: toResult(error) }) }] };
+      }
+    });
   server.registerTool('vps_storage_audit', { ...auth,
     description: 'Read-only disk-space inventory on the always-on Linux VPS relay: fixed directories, Docker summary and journal usage. No delete or arbitrary commands.',
     annotations: { readOnlyHint: true }, inputSchema: z.object({}) }, async () => {
@@ -32,7 +44,7 @@ export function createProxyServer(channel: RelayChannel, storageAudit: () => Pro
     }
   }
   server.registerTool('vps_root_status', { ...auth,
-    description: 'Check whether the owner-enabled, high-risk VPS root executor is available (no elevated action)',
+    description: 'Read-only status and job counters of the separately owner-enabled VPS root helper. Does not execute, start, or cancel commands.',
     annotations: { readOnlyHint: true }, inputSchema: z.object({}) }, () => rootCall({ action: 'status' }));
   server.registerTool('vps_root_exec', { ...auth,
     description: 'HIGH RISK: execute arbitrary argv as root on the VPS, with full filesystem and OS control. Prefer vps_root_status and vps_storage_audit for read-only checks. ChatGPT may block risky actions independently of VPS permissions; do not retry via alternate tools to evade a refusal. Use vps_root_poll for output. Requires intentional root-helper enablement.',

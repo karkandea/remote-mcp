@@ -1,6 +1,6 @@
 # MCP Arkan operational hardening (review-only, not deployed)
 
-This change adds two independent operational safeguards without changing the active MCP tool list, enabling GitHub Actions, or installing anything onto the live host.
+This change adds operational safeguards and a narrowly scoped MCP preflight tool without enabling GitHub Actions or installing anything onto the live host.
 
 ## 1. Pinned release-manifest gate
 
@@ -34,6 +34,18 @@ ChatGPT may require confirmation for a tool action or block a particularly risky
 Use genuinely narrower tools when they fit the task: `vps_root_status`, `vps_storage_audit`, `system_status`, `fs_read`, `process_info`, or an explicitly approved `terminal_start` profile. Arbitrary `vps_root_exec` and `mac_user_exec` remain honestly marked high risk. If a particular action is denied by ChatGPT, stop and request an authorized alternative or user guidance; never relabel, split, or disguise that same action to bypass the denial.
 
 An MCP tool cannot report its own structured error if ChatGPT blocks invocation *before* it reaches the server. The host's refusal is the diagnostic in that case.
+
+### Agent-facing safe preflight (`mcp_diagnostics`)
+
+Instead of asking an agent to run an arbitrary root shell command for a connectivity or capacity check, it can call `mcp_diagnostics` with **no arguments**. The tool runs inside the non-root relay and reports only:
+
+- Relay reachability and process uptime, plus whether the outbound Mac agent is connected.
+- VPS root-volume capacity, a warning/critical capacity label, and a reminder that disk usage does not explain a ChatGPT safety refusal.
+- Whether a root-helper socket was configured (**not** whether it is healthy or authorized), plus a map of genuinely limited alternatives for routine checks.
+
+It does **not** call the root helper, run shell commands, read Mac files, modify services, access other apps, or change networking. `vps_storage_audit` remains the dedicated read-only disk breakdown. This is not a replacement for an authorized privileged deployment, migration, backup, or root-service repair. If the host blocks such an action, capture its tool name and sanitized arguments and stop; an MCP update cannot override that refusal.
+
+After approved deployment, refresh the existing custom MCP app's actions in ChatGPT if the new tool is missing, and validate `mcp_diagnostics` read-only from the intended account. A passing local MCP integration test does not prove the ChatGPT host will permit a particular high-risk action.
 
 The optional `ops/watchdog.mjs` is an independent read-only local diagnostic probe. It produces JSON records in journald on a five-minute systemd timer if installed. It **does not notify Arkan** and has no webhook or Telegram integration. The history may help diagnose an issue after an agent reports failure.
 
