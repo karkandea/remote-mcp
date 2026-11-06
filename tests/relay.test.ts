@@ -53,6 +53,9 @@ test('OAuth gate blocks anonymous callers; MCP request crosses VPS channel and r
     assert.equal(metadata.status, 200);
     assert.deepEqual((await metadata.json() as { authorization_servers: string[] }).authorization_servers,
       [relayConfig.authIssuer]);
+    const initiallyOffline = await fetch(`${base}/readyz`);
+    assert.equal(initiallyOffline.status, 503);
+    assert.deepEqual(await initiallyOffline.json(), { ok: false, agentConnected: false });
     const denied = await fetch(`${base}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }) });
     assert.equal(denied.status, 401);
@@ -107,12 +110,15 @@ test('OAuth gate blocks anonymous callers; MCP request crosses VPS channel and r
     let readyAgain!: () => void;
     const reconnected = new Promise<void>(resolve => { readyAgain = resolve; });
     let connectionCount = 0;
+    const disconnectEvents: Array<{ closeCode: number; retryInMs: number }> = [];
     agentPromise = runRemoteAgent(configSchema.parse({ allowedRoots: [root] }), {
       url: `ws://127.0.0.1:${relay.port}/agent/ws`, token: secret, signal: abort.signal,
       onConnect: () => { if (++connectionCount === 1) ready(); else readyAgain(); },
+      onDisconnect: event => disconnectEvents.push(event),
     });
     await Promise.race([connected, new Promise((_, reject) => setTimeout(() => reject(new Error('Agent connection timeout')), 5000))]);
     assert.equal(relay.channel.connected, true);
+    assert.equal((await fetch(`${base}/readyz`)).status, 200);
     const read = await client.callTool({ name: 'fs_read', arguments: { path: file } });
     assert.equal(read.isError, undefined);
     assert.match(JSON.stringify(read.content), /actual Mac document through relay/);
@@ -128,6 +134,8 @@ test('OAuth gate blocks anonymous callers; MCP request crosses VPS channel and r
     await Promise.race([reconnected,
       new Promise((_, reject) => setTimeout(() => reject(new Error('Agent reconnect timeout')), 5000))]);
     assert.equal(relay.channel.connected, true);
+    assert.ok(disconnectEvents.length >= 1);
+    assert.equal(disconnectEvents[0]?.retryInMs, 2_000);
     const afterReconnect = await client.callTool({ name: 'fs_read', arguments: { path: file } });
     assert.equal(afterReconnect.isError, undefined);
     abort.abort();
@@ -136,6 +144,7 @@ test('OAuth gate blocks anonymous callers; MCP request crosses VPS channel and r
       await new Promise(resolve => setTimeout(resolve, 10));
     }
     assert.equal(relay.channel.connected, false);
+    assert.equal((await fetch(`${base}/readyz`)).status, 503);
     const offlineAudit = await client.callTool({ name: 'vps_storage_audit', arguments: {} });
     assert.equal(offlineAudit.isError, undefined);
     assert.match(JSON.stringify(offlineAudit.content), /test-vps/);

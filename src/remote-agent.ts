@@ -8,7 +8,20 @@ import { MAX_FRAME_BYTES, toolUnavailable, type RelayCall, type RelayReply } fro
 import { createContext, createServer } from './server.js';
 import { monitorWebSocketHeartbeat } from './websocket-heartbeat.js';
 
-export type AgentConnectionOptions = { url: string; token: string; signal?: AbortSignal; onConnect?: () => void };
+export type DisconnectEvent = {
+  closeCode: number;
+  errorCode?: string;
+  connectedMs: number;
+  retryInMs: number;
+};
+
+export type AgentConnectionOptions = {
+  url: string;
+  token: string;
+  signal?: AbortSignal;
+  onConnect?: () => void;
+  onDisconnect?: (event: DisconnectEvent) => void;
+};
 
 export function validateAgentConnection(options: AgentConnectionOptions): void {
   const url = new URL(options.url);
@@ -38,7 +51,11 @@ export async function runRemoteAgent(config: AgentConfig, options: AgentConnecti
   await Promise.all([local.connect(serverTransport), client.connect(clientTransport)]);
   try {
     const allowed = new Set((await client.listTools()).tools.map(tool => tool.name));
+    let retryAttempt = 0;
     while (!options.signal?.aborted) {
+      let openedAt = 0;
+      let closeCode = 1006;
+      let errorCode: string | undefined;
       await new Promise<void>(resolve => {
         const ws = new WebSocket(options.url, { headers: { Authorization: `Bearer ${options.token}` },
           maxPayload: MAX_FRAME_BYTES, handshakeTimeout: 10_000 });
@@ -46,7 +63,8 @@ export async function runRemoteAgent(config: AgentConfig, options: AgentConnecti
         const abort = () => ws.terminate();
         options.signal?.addEventListener('abort', abort, { once: true });
         ws.on('open', () => {
-          monitorWebSocketHeartbeat(ws);
+          openedAt = Date.now();
+          monitorWebSocketHeartbeat(ws, undefined, undefined, () => { errorCode = 'HEARTBEAT_TIMEOUT'; });
           options.onConnect?.();
         });
         ws.on('message', async (data, isBinary) => {
@@ -74,13 +92,23 @@ export async function runRemoteAgent(config: AgentConfig, options: AgentConnecti
           if (Buffer.byteLength(json) > MAX_FRAME_BYTES) { ws.close(1009, 'Tool result too large'); return; }
           if (ws.readyState === WebSocket.OPEN) ws.send(json);
         }
-        ws.on('error', () => { /* Reconnect after close, without logging credentials. */ });
-        ws.once('close', () => {
+        ws.on('error', (error: Error & { code?: string }) => {
+          // Log only a safe error category; never URLs, headers or device credentials.
+          errorCode = /^[A-Z0-9_]+$/.test(error.code ?? '') ? error.code : 'WEBSOCKET_ERROR';
+        });
+        ws.once('close', (code) => {
+          closeCode = code;
           options.signal?.removeEventListener('abort', abort);
           resolve();
         });
       });
-      if (!options.signal?.aborted) await delay(2_000, undefined, { signal: options.signal }).catch(() => {});
+      if (!options.signal?.aborted) {
+        const connectedMs = openedAt ? Date.now() - openedAt : 0;
+        if (connectedMs >= 30_000) retryAttempt = 0;
+        const retryInMs = Math.min(30_000, 2_000 * 2 ** Math.min(retryAttempt++, 4));
+        options.onDisconnect?.({ closeCode, errorCode, connectedMs, retryInMs });
+        await delay(retryInMs, undefined, { signal: options.signal }).catch(() => {});
+      }
     }
   } finally {
     await client.close();

@@ -27,12 +27,27 @@ export function toolUnavailable(message: string): CallToolResult {
 export class RelayChannel {
   private socket?: WebSocket;
   private pending = new Map<string, { resolve: (value: CallToolResult) => void; timer: NodeJS.Timeout }>();
+  private connectedAt?: string;
+  private disconnectedAt?: string;
+  private lastPongAt?: string;
+  private disconnectCount = 0;
 
   get connected(): boolean { return this.socket?.readyState === WebSocket.OPEN; }
+
+  health(): { connected: boolean; connectedAt?: string; disconnectedAt?: string;
+    lastPongAt?: string; disconnectCount: number; pendingRequests: number } {
+    return { connected: this.connected, connectedAt: this.connectedAt,
+      disconnectedAt: this.disconnectedAt, lastPongAt: this.lastPongAt,
+      disconnectCount: this.disconnectCount, pendingRequests: this.pending.size };
+  }
 
   attach(socket: WebSocket): boolean {
     if (this.connected) return false;
     this.socket = socket;
+    this.connectedAt = new Date().toISOString();
+    this.lastPongAt = this.connectedAt;
+    process.stderr.write(`${this.connectedAt} Remote MCP relay device_connected\n`);
+    socket.on('pong', () => { this.lastPongAt = new Date().toISOString(); });
     socket.on('message', (data, isBinary) => {
       if (isBinary) { socket.close(1003, 'Text frames only'); return; }
       let reply: RelayReply;
@@ -51,13 +66,18 @@ export class RelayChannel {
     });
     socket.on('close', () => this.detach(socket));
     socket.on('error', () => this.detach(socket));
-    monitorWebSocketHeartbeat(socket);
+    monitorWebSocketHeartbeat(socket, undefined, undefined, () => {
+      process.stderr.write(`${new Date().toISOString()} Remote MCP relay heartbeat timeout\n`);
+    });
     return true;
   }
 
   private detach(socket: WebSocket): void {
     if (this.socket !== socket) return;
     this.socket = undefined;
+    this.disconnectedAt = new Date().toISOString();
+    this.disconnectCount++;
+    process.stderr.write(`${this.disconnectedAt} Remote MCP relay device_disconnected count=${this.disconnectCount}\n`);
     for (const item of this.pending.values()) {
       clearTimeout(item.timer);
       item.resolve(toolUnavailable('Mac agent disconnected'));

@@ -25,7 +25,10 @@ async function main(): Promise<void> {
       process.once('SIGTERM', () => abort.abort());
       await runRemoteAgent(await loadConfig(), {
         url: process.env.REMOTE_MCP_RELAY_WS ?? '', token: process.env.RELAY_DEVICE_TOKEN ?? '',
-        signal: abort.signal, onConnect: () => process.stderr.write('Remote MCP agent connected\n'),
+        signal: abort.signal,
+        onConnect: () => process.stderr.write(`${new Date().toISOString()} Remote MCP agent connected\n`),
+        onDisconnect: ({ closeCode, errorCode, connectedMs, retryInMs }) =>
+          process.stderr.write(`${new Date().toISOString()} Remote MCP agent disconnected code=${closeCode} error=${errorCode ?? 'none'} connectedMs=${connectedMs} retryMs=${retryInMs}\n`),
       });
       return;
     }

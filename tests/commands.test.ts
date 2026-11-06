@@ -62,3 +62,32 @@ test('Mac full-user mode executes with the local account only after persistent l
   assert.equal(completed.stdout, String(process.getuid()));
   await assert.rejects(commands.startAsUser([process.execPath], '.', 1000), /absolute/);
 });
+
+test('finished executions are bounded and never block the next command', async () => {
+  const commands = await commandFixture();
+  let oldestId = '';
+  for (let index = 0; index < 65; index++) {
+    const started = await commands.start('short') as { executionId: string };
+    if (index === 0) oldestId = started.executionId;
+    const finished = await waitForEnd(commands, started.executionId);
+    assert.equal(finished.status, 'completed');
+  }
+  const health = commands.health();
+  assert.equal(health.running, 0);
+  assert.ok(health.completedRetained <= 60);
+  assert.throws(() => commands.poll(oldestId), /Unknown execution ID/);
+  const next = await commands.start('short') as { executionId: string };
+  assert.equal((await waitForEnd(commands, next.executionId)).status, 'completed');
+});
+
+test('concurrent execution guard still protects the Mac', async () => {
+  const commands = await commandFixture();
+  const started = await Promise.all(Array.from({ length: 3 },
+    () => commands.start('long') as Promise<{ executionId: string }>));
+  try {
+    await assert.rejects(commands.start('short'), /At most three commands/);
+    assert.equal(commands.health().running, 3);
+  } finally {
+    for (const job of started) commands.cancel(job.executionId);
+  }
+});

@@ -152,7 +152,8 @@ export function createServer(ctx: AgentContext): McpServer {
       appLaunchProfiles: Object.keys(ctx.config.appLaunchProfiles),
       iphoneEnabled: ctx.config.iphoneControl.enabled,
       iphoneAllowedBundleIds: ctx.config.iphoneControl.allowedBundleIds,
-      serviceRestartAllowlist: ctx.config.serviceRestartAllowlist }), true));
+      serviceRestartAllowlist: ctx.config.serviceRestartAllowlist,
+      terminalHealth: ctx.commands.health() }), true));
   server.registerTool('device_disconnect', { description: 'Persistently revoke agent tool execution until owner locally resumes',
     inputSchema: z.object({}) }, wrap('device_disconnect', async () => {
       await ctx.device.disconnect();

@@ -30,6 +30,9 @@ type RootJob = {
 
 const MAX_WIRE_BYTES = 131_072;
 const MAX_OUTPUT_BYTES = 65_536;
+const MAX_ROOT_CONCURRENT = 2;
+const MAX_ROOT_HISTORY = 80;
+const ROOT_HISTORY_TTL_MS = 15 * 60_000;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Unknown helper error';
@@ -62,10 +65,29 @@ export async function startRootHelper(socketPath: string, options: { requireRoot
   if (options.requireRoot !== false && process.getuid?.() !== 0) throw new Error('Root helper requires root UID');
   if (!path.isAbsolute(socketPath)) throw new Error('Root socket path must be absolute');
   const jobs = new Map<string, RootJob>();
+  const pruneJobs = (): void => {
+    const now = Date.now();
+    for (const [id, job] of jobs) {
+      if (job.status !== 'running' && now - Date.parse(job.startedAt) >= ROOT_HISTORY_TTL_MS) {
+        jobs.delete(id);
+      }
+    }
+    let completed = [...jobs.values()].filter(job => job.status !== 'running').length;
+    for (const [id, job] of jobs) {
+      if (completed <= MAX_ROOT_HISTORY) break;
+      if (job.status !== 'running') { jobs.delete(id); completed--; }
+    }
+  };
+  const historyCleanup = setInterval(pruneJobs, 60_000);
+  historyCleanup.unref();
 
   function handle(request: RootOperation): unknown {
-    if (request.action === 'status') return { enabled: true, privileged: process.getuid?.() === 0,
-      activeJobs: [...jobs.values()].filter(job => job.status === 'running').length };
+    if (request.action === 'status') {
+      pruneJobs();
+      return { enabled: true, privileged: process.getuid?.() === 0,
+        activeJobs: [...jobs.values()].filter(job => job.status === 'running').length,
+        retainedJobs: jobs.size, retainedJobsLimit: MAX_ROOT_HISTORY };
+    }
     if (request.action === 'poll' || request.action === 'cancel') {
       const job = jobs.get(request.executionId);
       if (!job) throw new Error('Unknown root execution ID');
@@ -74,8 +96,8 @@ export async function startRootHelper(socketPath: string, options: { requireRoot
         status: job.status, exitCode: job.exitCode, stdout: job.stdout,
         stderr: job.stderr, truncated: job.truncated };
     }
-    if (jobs.size >= 100) throw new Error('Root job history full; restart the helper to clear it');
-    if ([...jobs.values()].filter(job => job.status === 'running').length >= 2) {
+    pruneJobs();
+    if ([...jobs.values()].filter(job => job.status === 'running').length >= MAX_ROOT_CONCURRENT) {
       throw new Error('At most two root commands may run concurrently');
     }
     if (!path.isAbsolute(request.cwd) || request.argv.some(arg => arg.includes('\0'))) {
@@ -150,6 +172,7 @@ export async function startRootHelper(socketPath: string, options: { requireRoot
   chmodSync(socketPath, 0o660);
   sendAudit('ready', { socket: socketPath });
   return { async close() {
+    clearInterval(historyCleanup);
     for (const job of jobs.values()) terminate(job, 'cancelled');
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     try { if (lstatSync(socketPath).isSocket()) unlinkSync(socketPath); }

@@ -105,6 +105,10 @@ export async function startRelayServer(config: RelayConfig,
         return;
       }
       if (req.method === 'GET' && pathname === '/healthz') { json(res, 200, { ok: true }); return; }
+      if (req.method === 'GET' && pathname === '/readyz') {
+        json(res, channel.connected ? 200 : 503, { ok: channel.connected, agentConnected: channel.connected });
+        return;
+      }
       if (pathname !== '/mcp') { json(res, 404, { error: 'not_found' }); return; }
       if (req.method !== 'POST') { json(res, 405, { error: 'method_not_allowed' }); return; }
       if (req.headers.origin) { json(res, 403, { error: 'origin_not_allowed' }); return; }
@@ -138,9 +142,27 @@ export async function startRelayServer(config: RelayConfig,
   } catch (error) { await agentSockets.close(); await handler.close(); throw error; }
   const address = http.address();
   const port = typeof address === 'object' && address ? address.port : config.port;
+  const startedAt = Date.now();
+  let lastOfflineWarningAt = 0;
+  let lastBusyWarningAt = 0;
+  const healthMonitor = setInterval(() => {
+    const health = channel.health();
+    const now = Date.now();
+    const offlineSince = health.disconnectedAt ? Date.parse(health.disconnectedAt) : startedAt;
+    if (!health.connected && now - offlineSince >= 60_000 && now - lastOfflineWarningAt >= 300_000) {
+      process.stderr.write(`${new Date().toISOString()} Remote MCP alert agent_offline_seconds=${Math.floor((now - offlineSince) / 1000)} disconnects=${health.disconnectCount}\n`);
+      lastOfflineWarningAt = now;
+    }
+    if (health.connected && health.pendingRequests >= 12 && now - lastBusyWarningAt >= 60_000) {
+      lastBusyWarningAt = now;
+      process.stderr.write(`${new Date().toISOString()} Remote MCP warning pending_requests=${health.pendingRequests}\n`);
+    }
+  }, 15_000);
+  healthMonitor.unref();
   return {
     port, channel,
     async close() {
+      clearInterval(healthMonitor);
       await agentSockets.close();
       await handler.close();
       await new Promise<void>((resolve, reject) => http.close(error => error ? reject(error) : resolve()));
