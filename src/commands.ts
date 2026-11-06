@@ -21,10 +21,40 @@ type Running = {
   cancel: () => void;
 };
 
+const MAX_CONCURRENT_JOBS = 3;
+const MAX_COMPLETED_HISTORY = 60;
+const COMPLETED_HISTORY_TTL_MS = 15 * 60_000;
+
 export class CommandTools {
   private readonly jobs = new Map<string, Running>();
 
-  constructor(private readonly policy: PathPolicy, private readonly config: AgentConfig) {}
+  constructor(private readonly policy: PathPolicy, private readonly config: AgentConfig) {
+    // Completed jobs must never exhaust the capacity to run new commands.
+    setInterval(() => this.pruneJobs(), 60_000).unref();
+  }
+
+  private pruneJobs(): void {
+    const now = Date.now();
+    for (const [id, job] of this.jobs) {
+      if (job.status !== 'running' && now - Date.parse(job.startedAt) >= COMPLETED_HISTORY_TTL_MS) {
+        this.jobs.delete(id);
+      }
+    }
+    let completed = [...this.jobs.values()].filter(job => job.status !== 'running').length;
+    for (const [id, job] of this.jobs) {
+      if (completed <= MAX_COMPLETED_HISTORY) break;
+      if (job.status !== 'running') {
+        this.jobs.delete(id);
+        completed--;
+      }
+    }
+  }
+
+  health(): { running: number; completedRetained: number; maxConcurrent: number } {
+    this.pruneJobs();
+    const running = [...this.jobs.values()].filter(job => job.status === 'running').length;
+    return { running, completedRetained: this.jobs.size - running, maxConcurrent: MAX_CONCURRENT_JOBS };
+  }
 
   async git(directory: string, action: 'status' | 'diff' | 'log'): Promise<unknown> {
     const cwd = await this.policy.readPath(directory);
@@ -60,8 +90,8 @@ export class CommandTools {
   }
 
   private launch(profileName: string, executable: string, args: string[], cwd: string, timeoutMs: number): unknown {
-    if (this.jobs.size >= 30) throw new AgentError('TOO_MANY_JOBS', 'Restart the agent to clear completed job history');
-    if ([...this.jobs.values()].filter(job => job.status === 'running').length >= 3) {
+    this.pruneJobs();
+    if ([...this.jobs.values()].filter(job => job.status === 'running').length >= MAX_CONCURRENT_JOBS) {
       throw new AgentError('BUSY', 'At most three commands may run concurrently');
     }
     const id = randomUUID();

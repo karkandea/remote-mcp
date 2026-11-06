@@ -24,7 +24,8 @@ class TestSocket extends EventEmitter {
 
 test('heartbeat terminates a half-open WebSocket when pongs stop', async () => {
   const socket = new TestSocket();
-  const stop = monitorWebSocketHeartbeat(socket as unknown as WebSocket, 15, 20);
+  let timeoutCount = 0;
+  const stop = monitorWebSocketHeartbeat(socket as unknown as WebSocket, 15, 20, () => timeoutCount++);
   try {
     await Promise.race([
       once(socket, 'close'),
@@ -32,6 +33,7 @@ test('heartbeat terminates a half-open WebSocket when pongs stop', async () => {
     ]);
     assert.equal(socket.pings, 1);
     assert.equal(socket.terminated, true);
+    assert.equal(timeoutCount, 1);
     assert.equal(socket.listenerCount('pong'), 0);
   } finally { stop(); }
 });

@@ -26,6 +26,26 @@ test('root-helper Unix socket manages start, poll, cancellation, without any net
     }
     assert.equal(result?.status, 'completed');
     assert.equal(result.stdout, 'root-test');
+    // More than the old 100-job lifetime cap must remain usable without restarting root.
+    for (let index = 0; index < 110; index++) {
+      const job = await callRootHelper(socket, {
+        action: 'start', argv: ['/bin/true'], cwd: root, timeoutMs: 2000,
+      }) as { executionId: string };
+      let finished: { status: string } | undefined;
+      for (let attempt = 0; attempt < 100; attempt++) {
+        finished = await callRootHelper(socket, { action: 'poll', executionId: job.executionId }) as { status: string };
+        if (finished.status !== 'running') break;
+        await new Promise(resolve => setTimeout(resolve, 5));
+      }
+      assert.equal(finished?.status, 'completed');
+    }
+    const bounded = await callRootHelper(socket, { action: 'status' }) as {
+      activeJobs: number; retainedJobs: number; retainedJobsLimit: number;
+    };
+    assert.equal(bounded.activeJobs, 0);
+    assert.ok(bounded.retainedJobs <= bounded.retainedJobsLimit);
+    await assert.rejects(callRootHelper(socket, { action: 'poll', executionId: started.executionId }),
+      /Unknown root execution/);
     const long = await callRootHelper(socket, { action: 'start', argv: [process.execPath,
       '-e', 'setTimeout(() => {}, 30000)'], cwd: root, timeoutMs: 5000 }) as { executionId: string };
     const stopped = await callRootHelper(socket, { action: 'cancel', executionId: long.executionId }) as { status: string };

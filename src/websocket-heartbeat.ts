@@ -11,6 +11,7 @@ export function monitorWebSocketHeartbeat(
   socket: WebSocket,
   intervalMs = HEARTBEAT_INTERVAL_MS,
   pongTimeoutMs = PONG_TIMEOUT_MS,
+  onTimeout?: () => void,
 ): () => void {
   let stopped = false;
   let awaitingPong = false;
@@ -34,11 +35,11 @@ export function monitorWebSocketHeartbeat(
     if (socket.readyState !== WebSocket.OPEN || awaitingPong) return;
     awaitingPong = true;
     deadline = setTimeout(() => {
-      if (!stopped && awaitingPong) socket.terminate();
+      if (!stopped && awaitingPong) { onTimeout?.(); socket.terminate(); }
     }, pongTimeoutMs);
     deadline.unref();
     try { socket.ping(); }
-    catch { socket.terminate(); }
+    catch { onTimeout?.(); socket.terminate(); }
   }, intervalMs);
   interval.unref();
   socket.on('pong', onPong);
