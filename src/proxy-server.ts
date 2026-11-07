@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { AgentError, toResult } from './errors.js';
 import type { RelayChannel } from './relay-channel.js';
-import { auditVpsStorage } from './vps-storage.js';
+import { auditVpsStorage, vpsHostStatus, listVpsIterations, recordVpsIteration } from './vps-storage.js';
 import { callRootHelper, type RootOperation } from './root-helper.js';
 
 /** Mac tool requests cross the agent channel; VPS inventory is read locally by the relay. */
@@ -30,6 +30,50 @@ export function createProxyServer(channel: RelayChannel, storageAudit: () => Pro
         text: JSON.stringify({ ok: false, error: toResult(error) }) }] };
     }
   }
+  server.registerTool('vps_host_status', { ...auth,
+    description: 'Fast read-only VPS health snapshot: uptime, host RAM/load, Docker count and relay warning count; no raw logs or arbitrary commands.',
+    annotations: { readOnlyHint: true }, inputSchema: z.object({}) }, async () => {
+      try {
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ ok: true, data: await vpsHostStatus() }) }] };
+      } catch (error) {
+        return { isError: true, content: [{ type: 'text' as const,
+          text: JSON.stringify({ ok: false, error: toResult(error) }) }] };
+      }
+    });
+  server.registerTool('vps_iteration_list', { ...auth,
+    description: 'Read bounded persistent VPS improvement/decision notes, kept separately from temporary command jobs.',
+    annotations: { readOnlyHint: true }, inputSchema: z.object({
+      limit: z.number().int().min(1).max(50).default(20),
+      category: z.enum(['observation', 'improvement', 'regression', 'decision']).optional(),
+    }) }, async ({ limit, category }) => {
+      try {
+        return { content: [{ type: 'text' as const, text: JSON.stringify({
+          ok: true, data: await listVpsIterations(limit, category),
+        }) }] };
+      } catch (error) {
+        return { isError: true, content: [{ type: 'text' as const,
+          text: JSON.stringify({ ok: false, error: toResult(error) }) }] };
+      }
+    });
+  server.registerTool('vps_iteration_record', { ...auth,
+    description: 'Persist one short, structured MCP improvement note on the VPS. Never use for credentials, logs or arbitrary files. Changes journal only.',
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    inputSchema: z.object({
+      category: z.enum(['observation', 'improvement', 'regression', 'decision']),
+      title: z.string().min(3).max(120),
+      finding: z.string().min(3).max(400),
+      outcome: z.string().min(3).max(400),
+      nextAction: z.string().max(240).optional(),
+    }).strict() }, async args => {
+      try {
+        return { content: [{ type: 'text' as const, text: JSON.stringify({
+          ok: true, data: await recordVpsIteration(args),
+        }) }] };
+      } catch (error) {
+        return { isError: true, content: [{ type: 'text' as const,
+          text: JSON.stringify({ ok: false, error: toResult(error) }) }] };
+      }
+    });
   server.registerTool('vps_root_status', { ...auth,
     description: 'Check whether the owner-enabled, high-risk VPS root executor is available (no elevated action)',
     annotations: { readOnlyHint: true }, inputSchema: z.object({}) }, () => rootCall({ action: 'status' }));
@@ -128,5 +172,90 @@ export function createProxyServer(channel: RelayChannel, storageAudit: () => Pro
     annotations: { readOnlyHint: true }, inputSchema: z.object({}) }, args => channel.call('device_status', args));
   server.registerTool('device_disconnect', { ...auth, description: 'Revoke local access until manually resumed on the Mac',
     inputSchema: z.object({}) }, args => channel.call('device_disconnect', args));
+  // An intentionally narrow batch: all children are individually read-only and schema-validated.
+  // This is not a remote script runner and cannot call privileged, write or recursive batch tools.
+  const batchValidators = {
+    vps_storage_audit: z.object({}).strict(),
+    vps_host_status: z.object({}).strict(),
+    vps_root_status: z.object({}).strict(),
+    vps_iteration_list: z.object({
+      limit: z.number().int().min(1).max(50).default(20),
+      category: z.enum(['observation', 'improvement', 'regression', 'decision']).optional(),
+    }).strict(),
+    fs_list: z.object({ path: z.string().min(1).max(4096) }).strict(),
+    fs_read: z.object({ path: z.string().min(1).max(4096) }).strict(),
+    fs_stat: z.object({ path: z.string().min(1).max(4096) }).strict(),
+    fs_search: z.object({ directory: z.string().min(1).max(4096),
+      query: z.string().min(1).max(300), limit: z.number().int().min(1).max(100).default(50) }).strict(),
+    process_list: z.object({ filter: z.string().min(1).max(100).optional() }).strict(),
+    process_info: z.object({ pid: z.number().int().positive() }).strict(),
+    system_status: z.object({}).strict(),
+    system_service_status: z.object({ label: z.string().min(1).max(120) }).strict(),
+    git_status: z.object({ directory: z.string().min(1).max(4096) }).strict(),
+    git_diff: z.object({ directory: z.string().min(1).max(4096) }).strict(),
+    git_log: z.object({ directory: z.string().min(1).max(4096) }).strict(),
+    device_info: z.object({}).strict(),
+    device_status: z.object({}).strict(),
+    iphone_status: z.object({}).strict(),
+  };
+  const batchToolNames = Object.keys(batchValidators) as [keyof typeof batchValidators,
+    ...(keyof typeof batchValidators)[]];
+  server.registerTool('batch_read', { ...auth,
+    description: 'Run up to 8 independent READ-ONLY Mac/VPS checks in one call; 4 workers in parallel or sequential. Per-step errors are isolated. No shell, writes, root exec or script upload.',
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    inputSchema: z.object({
+      operations: z.array(z.object({
+        tool: z.enum(batchToolNames),
+        args: z.record(z.string(), z.unknown()).default({}),
+      }).strict()).min(1).max(8),
+      mode: z.enum(['parallel', 'sequential']).default('parallel'),
+    }).strict() }, async ({ operations, mode }) => {
+      const startedAt = Date.now();
+      type BatchItem = { index: number; tool: string; ok: boolean; durationMs: number;
+        data?: unknown; error?: unknown };
+      const results: BatchItem[] = new Array(operations.length);
+      const execute = async (index: number): Promise<BatchItem> => {
+        const op = operations[index]!;
+        const start = Date.now();
+        try {
+          const args = batchValidators[op.tool].parse(op.args) as Record<string, unknown>;
+          let reply;
+          if (op.tool === 'vps_storage_audit') {
+            reply = { ok: true, data: await storageAudit() };
+          } else if (op.tool === 'vps_host_status') {
+            reply = { ok: true, data: await vpsHostStatus() };
+          } else if (op.tool === 'vps_iteration_list') {
+            reply = { ok: true, data: await listVpsIterations(args.limit as number,
+              args.category as 'observation' | 'improvement' | 'regression' | 'decision' | undefined) };
+          } else {
+            const response = op.tool === 'vps_root_status'
+              ? await rootCall({ action: 'status' }) : await channel.call(op.tool, args);
+            const body = response.content.find(item => item.type === 'text');
+            if (!body || body.type !== 'text') throw new AgentError('INVALID_REPLY', 'Expected text result');
+            reply = JSON.parse(body.text) as { ok: boolean; data?: unknown; error?: unknown };
+          }
+          if (Buffer.byteLength(JSON.stringify(reply)) > 32_768) {
+            throw new AgentError('BATCH_RESULT_TOO_LARGE', 'Use the individual tool for this large result');
+          }
+          return { index, tool: op.tool, ok: reply.ok === true, durationMs: Date.now() - start,
+            ...(reply.ok ? { data: reply.data } : { error: reply.error }) };
+        } catch (error) {
+          return { index, tool: op.tool, ok: false, durationMs: Date.now() - start,
+            error: toResult(error) };
+        }
+      };
+      let cursor = 0;
+      const count = mode === 'sequential' ? 1 : Math.min(4, operations.length);
+      await Promise.all(Array.from({ length: count }, async () => {
+        while (cursor < operations.length) {
+          const index = cursor++;
+          results[index] = await execute(index);
+        }
+      }));
+      return { content: [{ type: 'text' as const, text: JSON.stringify({ ok: true, data: {
+        mode, operationCount: operations.length, succeeded: results.filter(item => item.ok).length,
+        elapsedMs: Date.now() - startedAt, results,
+      } }) }] };
+    });
   return server;
 }

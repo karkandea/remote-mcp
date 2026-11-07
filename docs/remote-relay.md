@@ -71,6 +71,41 @@ The relay remains the non-root `remote-mcp` service with systemd filesystem prot
 
 Any cleanup suggestions are **review-only candidates**, not permission to remove data. A full root-owned Docker or journal audit requires a separately approved privileged collector; do not weaken the relay service to grant broad access.
 
+## Hybrid batch reads and durable iteration memory (2026-11-07)
+
+This is implemented as a **bounded read-only batch**, not an agent-writable script sandbox:
+
+- `batch_read`: 1–8 independent checks, `mode: "parallel"` (up to four concurrent) or `"sequential"`. Every child name is a fixed allowlisted, read-only tool with its own strict argument schema. Dangerous tools such as `mac_user_exec`, `vps_root_exec`, `fs_apply_patch`, process termination and iPhone input actions are never accepted as batch children.
+- Child results are indexed, include success/error and elapsed milliseconds, and remain independent on failure. A child result larger than 32 KiB returns `BATCH_RESULT_TOO_LARGE`; call that one tool separately. No nested batches, uploaded scripts, background loops or automatic writes.
+- The VPS can include `vps_host_status` (uptime, memory, CPU load, Docker running count, relay warning count), `vps_storage_audit` (cached heavier disk inventory), `vps_root_status` and `vps_iteration_list`. They work even when the Mac is offline. Mac checks fail individually with a clear offline error.
+- `vps_host_status` exposes **counts only**, not raw journal lines or command output. Docker/journal may be unavailable to the non-root relay and are explicitly marked so.
+- ChatGPT/tool clients can still invoke independent tools concurrently without batching. Use `batch_read` for a known group of **independent read checks**, and use ordinary individual tools for dependent steps and mutating work.
+
+Example single-tool request:
+
+`batch_read({"mode":"parallel","operations":[{"tool":"vps_host_status"},{"tool":"vps_storage_audit"},{"tool":"vps_root_status"},{"tool":"device_status"}]})`
+
+### State separation (critical to avoid TOO_MANY_JOBS)
+
+| Data | Storage | Lifetime |
+| --- | --- | --- |
+| Running Mac process IDs and bounded output | Mac agent in-memory job map | Until exit/cancel/timeout |
+| Completed Mac execution results | Same temporary map | Up to 60 results; TTL 15 min; not counted against 3 active slots |
+| Completed VPS root execution results | Root-helper temporary map | Up to 100 results; TTL 15 min; not counted against 2 active slots |
+| Improvement/decision notes | `/var/lib/remote-mcp/agent-iterations.jsonl` on VPS | Survives relay restart; last 200 structured entries, 512 KiB hard limit |
+| Release design and deployment procedure | Repository `docs/` + branch history | Version controlled |
+
+**Do not delete a completed job immediately:** the agent needs a short window to call `terminal_poll`/`vps_root_poll` and retrieve its output. Both executors evict completed jobs automatically, never block new starts because of their history, and have hard concurrency caps. Long-term learning must **never** reuse job maps or preserve raw shell output.
+
+### Agent iteration protocol
+
+1. Before modifying MCP infrastructure, call `vps_iteration_list` (optionally filter `category`) and inspect the relevant Git branch/docs to avoid repeated regressions. Reading notes must not grant additional authority.
+2. Audit/plan; perform approved changes only through existing scoped tools and staging. Validate with unit/integration tests plus an end-to-end health check.
+3. After a verified improvement or observed regression, use `vps_iteration_record` with `category`, `title`, `finding`, `outcome` and optional `nextAction`. Record facts and limitations, not credentials, private user data, command stdout, full logs or arbitrary scripts. The tool requires OAuth and is classified as **write**, so client approval may apply.
+4. Record implementation and rollback steps in version-controlled docs as well. The note journal is operational recall, **not** an executable instruction queue or a substitute for source control.
+
+The relay systemd unit uses `StateDirectory=remote-mcp` and `StateDirectoryMode=0700` while keeping `ProtectSystem=strict`, so only this private state path is writable. The journal file uses mode `0600`, atomic replacement, serialized writes, and a fixed retention budget. The server refuses common token patterns; this is defense in depth, not a complete DLP solution.
+
 ## VPS environment variables
 
 The relay reads these variables when starting:

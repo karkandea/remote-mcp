@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import { InMemoryTransport } from '@modelcontextprotocol/server';
 import WebSocket from 'ws';
 import { configSchema } from '../src/config.js';
 import { runRemoteAgent, validateAgentConnection } from '../src/remote-agent.js';
-import { safeTokenEqual } from '../src/relay-channel.js';
+import { RelayChannel, safeTokenEqual } from '../src/relay-channel.js';
+import { createProxyServer } from '../src/proxy-server.js';
+import { listVpsIterations, recordVpsIteration } from '../src/vps-storage.js';
 import { startRelayServer, validateRelayConfig, type RelayConfig } from '../src/relay-server.js';
 
 const secret = 'test-0123456789-0123456789-0123456789';
@@ -82,7 +85,10 @@ test('OAuth gate blocks anonymous callers; MCP request crosses VPS channel and r
       { authProvider: { token: async () => 'authorized-test-token' } });
     await client.connect(transport);
     const listed = await client.listTools();
-    assert.equal(listed.tools.length, 37);
+    assert.equal(listed.tools.length, 41);
+    assert.ok(listed.tools.some(tool => tool.name === 'batch_read'));
+    assert.ok(listed.tools.some(tool => tool.name === 'vps_host_status'));
+    assert.equal(listed.tools.find(tool => tool.name === 'batch_read')?.annotations?.readOnlyHint, true);
     assert.ok(listed.tools.some(tool => tool.name === 'vps_storage_audit'));
     assert.ok(listed.tools.some(tool => tool.name === 'iphone_screenshot'));
     assert.ok(listed.tools.some(tool => tool.name === 'mac_user_exec'));
@@ -104,6 +110,26 @@ test('OAuth gate blocks anonymous callers; MCP request crosses VPS channel and r
     const offline = await client.callTool({ name: 'fs_read', arguments: { path: file } });
     assert.equal(offline.isError, true);
     assert.match(JSON.stringify(offline.content), /offline/);
+    const offlineBatch = await client.callTool({ name: 'batch_read', arguments: {
+      mode: 'parallel', operations: [
+        { tool: 'vps_storage_audit' },
+        { tool: 'fs_read', args: { path: file } },
+        { tool: 'vps_root_status' },
+      ],
+    } });
+    assert.equal(offlineBatch.isError, undefined);
+    const offlineBody = offlineBatch.content[0];
+    assert.equal(offlineBody?.type, 'text');
+    const offlineResults = JSON.parse(offlineBody.text) as { data: {
+      succeeded: number; results: Array<{ ok: boolean; tool: string }> } };
+    assert.equal(offlineResults.data.succeeded, 1);
+    assert.deepEqual(offlineResults.data.results.map(item => item.tool),
+      ['vps_storage_audit', 'fs_read', 'vps_root_status']);
+    assert.deepEqual(offlineResults.data.results.map(item => item.ok), [true, false, false]);
+    const forbiddenBatch = await client.callTool({ name: 'batch_read', arguments: {
+      operations: [{ tool: 'fs_apply_patch', args: { path: file } }],
+    } });
+    assert.equal(forbiddenBatch.isError, true);
 
     let ready!: () => void;
     const connected = new Promise<void>(resolve => { ready = resolve; });
@@ -122,6 +148,20 @@ test('OAuth gate blocks anonymous callers; MCP request crosses VPS channel and r
     const read = await client.callTool({ name: 'fs_read', arguments: { path: file } });
     assert.equal(read.isError, undefined);
     assert.match(JSON.stringify(read.content), /actual Mac document through relay/);
+    const onlineBatch = await client.callTool({ name: 'batch_read', arguments: {
+      mode: 'parallel', operations: [
+        { tool: 'fs_read', args: { path: file } },
+        { tool: 'fs_stat', args: { path: file } },
+        { tool: 'device_status' },
+        { tool: 'vps_storage_audit' },
+      ],
+    } });
+    assert.equal(onlineBatch.isError, undefined);
+    const onlineBody = onlineBatch.content[0];
+    assert.equal(onlineBody?.type, 'text');
+    const onlineData = JSON.parse(onlineBody.text) as { data: { succeeded: number; results: unknown[] } };
+    assert.equal(onlineData.data.succeeded, 4);
+    assert.equal(onlineData.data.results.length, 4);
     const blocked = await client.callTool({ name: 'fs_read', arguments: { path: outside } });
     assert.equal(blocked.isError, true);
     assert.match(JSON.stringify(blocked.content), /PATH_DENIED/);
@@ -160,5 +200,78 @@ test('OAuth gate blocks anonymous callers; MCP request crosses VPS channel and r
     else process.env.REMOTE_MCP_ALLOW_NON_MAC = previousMacFlag;
     if (previousConfig === undefined) delete process.env.REMOTE_MCP_CONFIG;
     else process.env.REMOTE_MCP_CONFIG = previousConfig;
+  }
+});
+
+test('VPS improvement notes are persistent, private, bounded and reject common credentials', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'remote-mcp-iteration-'));
+  const journal = path.join(root, 'iterations.jsonl');
+  await assert.rejects(recordVpsIteration({
+    category: 'observation', title: 'unsafe secret', finding: 'Bearer abc123xyz',
+    outcome: 'Should never persist',
+  }, journal), /credentials/);
+  // Serialized simultaneous writes must not lose entries, and eviction never affects active commands.
+  await Promise.all(Array.from({ length: 205 }, (_, index) => recordVpsIteration({
+    category: index % 2 ? 'improvement' : 'decision',
+    title: 'iteration-' + index, finding: 'Observed a deterministic state',
+    outcome: 'Recorded safe summary', nextAction: 'Verify next iteration',
+  }, journal)));
+  const data = await listVpsIterations(50, undefined, journal) as {
+    total: number; maxRetained: number; entries: Array<{ title: string }>;
+  };
+  assert.equal(data.total, 200);
+  assert.equal(data.maxRetained, 200);
+  assert.equal(data.entries.length, 50);
+  assert.equal(data.entries[0]?.title, 'iteration-204');
+  assert.equal(data.entries[49]?.title, 'iteration-155');
+  const filtered = await listVpsIterations(10, 'improvement', journal) as { entries: Array<{
+    category: string;
+  }> };
+  assert.ok(filtered.entries.every(entry => entry.category === 'improvement'));
+  const info = await stat(journal);
+  assert.equal(info.mode & 0o777, 0o600);
+});
+
+test('hybrid batch limits concurrency to four, keeps item ordering and supports sequential mode', async () => {
+  let active = 0;
+  let peak = 0;
+  const server = createProxyServer(new RelayChannel(), async () => {
+    active++;
+    peak = Math.max(active, peak);
+    await new Promise(resolve => setTimeout(resolve, 30));
+    active--;
+    return { from: 'bounded-vps-read' };
+  });
+  const client = new Client({ name: 'batch-test', version: '0.1.0' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  try {
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    const operations = Array.from({ length: 8 }, () => ({ tool: 'vps_storage_audit' }));
+    const parallel = await client.callTool({ name: 'batch_read', arguments: { mode: 'parallel', operations } });
+    assert.equal(parallel.isError, undefined);
+    const parallelText = parallel.content[0];
+    assert.equal(parallelText?.type, 'text');
+    const parallelReport = JSON.parse((parallelText as { text: string }).text) as {
+      data: { succeeded: number; results: Array<{ index: number; ok: boolean }> };
+    };
+    assert.equal(parallelReport.data.succeeded, 8);
+    assert.deepEqual(parallelReport.data.results.map(item => item.index), [0, 1, 2, 3, 4, 5, 6, 7]);
+    assert.equal(peak, 4);
+    peak = 0;
+    const sequential = await client.callTool({ name: 'batch_read', arguments: { mode: 'sequential', operations } });
+    assert.equal(sequential.isError, undefined);
+    assert.equal(peak, 1);
+    const blockedArguments = await client.callTool({ name: 'batch_read', arguments: {
+      operations: [{ tool: 'fs_read', args: { path: '/tmp/not-allowed', command: 'delete' } }],
+    } });
+    const invalidText = blockedArguments.content[0];
+    assert.equal(invalidText?.type, 'text');
+    const rejected = JSON.parse((invalidText as { text: string }).text) as {
+      data: { results: Array<{ ok: boolean }> };
+    };
+    assert.equal(rejected.data.results[0]?.ok, false);
+  } finally {
+    await client.close();
+    await server.close();
   }
 });

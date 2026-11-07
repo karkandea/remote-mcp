@@ -1,6 +1,8 @@
 import { execFile } from 'node:child_process';
-import { stat, statfs } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { mkdir, readFile, rename, stat, statfs, unlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
+import path from 'node:path';
 import { promisify } from 'node:util';
 import { AgentError } from './errors.js';
 
@@ -110,4 +112,105 @@ export async function auditVpsStorage(): Promise<VpsStorageReport> {
     }).finally(() => { pending = undefined; });
   }
   return pending;
+}
+
+/** Fast, bounded VPS status. No shell, root privileges, caller-supplied commands or raw logs. */
+export async function vpsHostStatus(): Promise<unknown> {
+  if (process.platform !== 'linux') {
+    throw new AgentError('UNSUPPORTED_PLATFORM', 'VPS host status requires Linux');
+  }
+  const [docker, journal] = await Promise.all([
+    readCommand('/usr/bin/docker', ['ps', '--format', '{{.ID}}'], 2_000),
+    readCommand('/usr/bin/journalctl', ['-u', 'remote-mcp-relay.service', '--since', '-15 min',
+      '--no-pager', '--output=cat'], 2_000),
+  ]);
+  const events = journal?.split('\n').filter(line => line.includes('Remote MCP ')) ?? [];
+  return {
+    host: os.hostname(), collectedAt: new Date().toISOString(), uptimeSeconds: Math.round(os.uptime()),
+    loadAverage: os.loadavg().map(value => Math.round(value * 100) / 100),
+    memory: { totalBytes: os.totalmem(), freeBytes: os.freemem() },
+    docker: docker === undefined ? { status: 'unavailable' } : {
+      status: 'ok', runningContainers: docker ? docker.split('\n').filter(Boolean).length : 0,
+    },
+    relayJournal: journal === undefined ? { status: 'unavailable' } : {
+      status: 'ok', sampledEvents: events.length,
+      recentWarnings: events.filter(line => /(?:warning|alert|heartbeat timeout|device_disconnected)/i.test(line)).length,
+    },
+    readOnly: true,
+    note: 'Host memory and load are sampled; Docker/journal checks are optional and contain no raw log content.',
+  };
+}
+
+export type VpsIteration = {
+  id: string;
+  recordedAt: string;
+  category: 'observation' | 'improvement' | 'regression' | 'decision';
+  title: string;
+  finding: string;
+  outcome: string;
+  nextAction?: string;
+};
+
+export type VpsIterationInput = Pick<VpsIteration, 'category' | 'title' | 'finding' | 'outcome' | 'nextAction'>;
+
+// Fixed state directory, provisioned by systemd StateDirectory=remote-mcp.
+// Job stdout/argv never enter this file. It is separate from disposable execution IDs.
+const ITERATIONS_PATH = '/var/lib/remote-mcp/agent-iterations.jsonl';
+const MAX_ITERATIONS = 200;
+const MAX_ITERATION_FILE_BYTES = 512_000;
+let noteQueue: Promise<unknown> = Promise.resolve();
+
+async function loadIterations(filePath = ITERATIONS_PATH): Promise<VpsIteration[]> {
+  let body: string;
+  try {
+    const info = await stat(filePath);
+    if (info.size > MAX_ITERATION_FILE_BYTES) {
+      throw new AgentError('NOTES_TOO_LARGE', 'Iteration journal exceeded its fixed size budget');
+    }
+    body = await readFile(filePath, 'utf8');
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return [];
+    throw error;
+  }
+  return body.trim() ? body.trim().split('\n').map(line => JSON.parse(line) as VpsIteration) : [];
+}
+
+export async function listVpsIterations(limit = 20, category?: VpsIteration['category'],
+  filePath = ITERATIONS_PATH): Promise<unknown> {
+  const items = await loadIterations(filePath);
+  return { total: items.length, maxRetained: MAX_ITERATIONS,
+    entries: items.filter(item => !category || item.category === category).slice(-limit).reverse(),
+    storage: 'VPS persistent state; separate from terminal job history' };
+}
+
+export async function recordVpsIteration(input: VpsIterationInput,
+  filePath = ITERATIONS_PATH): Promise<VpsIteration> {
+  const fields = [input.title, input.finding, input.outcome, input.nextAction ?? ''];
+  // Avoid credentials, copied command outputs and common bearer/API-token material in persistent notes.
+  if (fields.some(value => /(?:Bearer\s+\S+|gh[ps]_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[A-Z0-9]{16}|-----BEGIN .*PRIVATE KEY-----)/i.test(value))) {
+    throw new AgentError('SENSITIVE_CONTENT', 'Do not store credentials or command output in iteration notes');
+  }
+  const action = async (): Promise<VpsIteration> => {
+    const previous = await loadIterations(filePath);
+    const item: VpsIteration = { id: randomUUID(), recordedAt: new Date().toISOString(),
+      category: input.category, title: input.title, finding: input.finding,
+      outcome: input.outcome, ...(input.nextAction ? { nextAction: input.nextAction } : {}) };
+    const lines = [...previous, item].slice(-MAX_ITERATIONS).map(entry => JSON.stringify(entry)).join('\n') + '\n';
+    if (Buffer.byteLength(lines) > MAX_ITERATION_FILE_BYTES) {
+      throw new AgentError('NOTES_TOO_LARGE', 'Iteration journal exceeds fixed size budget');
+    }
+    await mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+    const tempPath = filePath + '.' + randomUUID() + '.tmp';
+    try {
+      await writeFile(tempPath, lines, { flag: 'wx', mode: 0o600 });
+      await rename(tempPath, filePath);
+    } catch (error) {
+      await unlink(tempPath).catch(() => {});
+      throw error;
+    }
+    return item;
+  };
+  const pendingWrite = noteQueue.then(action, action);
+  noteQueue = pendingWrite.then(() => undefined, () => undefined);
+  return pendingWrite;
 }

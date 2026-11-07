@@ -18,6 +18,9 @@ NoNewPrivileges=true
 CapabilityBoundingSet=
 AmbientCapabilities=
 ProtectSystem=strict
+# Dedicated, private, persistent owner-approved iteration notes; no writable access elsewhere.
+StateDirectory=remote-mcp
+StateDirectoryMode=0700
 ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true

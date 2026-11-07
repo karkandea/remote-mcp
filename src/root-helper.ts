@@ -31,7 +31,7 @@ type RootJob = {
 const MAX_WIRE_BYTES = 131_072;
 const MAX_OUTPUT_BYTES = 65_536;
 const MAX_ROOT_CONCURRENT = 2;
-const MAX_ROOT_HISTORY = 80;
+const MAX_ROOT_HISTORY = 100;
 const ROOT_HISTORY_TTL_MS = 15 * 60_000;
 
 function errorMessage(error: unknown): string {
