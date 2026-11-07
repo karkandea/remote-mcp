@@ -14,7 +14,7 @@ test('sandbox Podman argv is pinned and contains mandatory isolation flags', () 
   for (const flag of ['--network=none', '--read-only', '--cap-drop=all',
     '--security-opt=no-new-privileges', '--pids-limit=32',
     '--memory=256m', '--memory-swap=256m', '--userns=keep-id',
-    '--user=1006:1006', '--pull=never']) {
+    '--user=1006:1006', '--pull=never', '--interactive']) {
     assert.ok(args.includes(flag), 'Missing sandbox flag ' + flag);
   }
   assert.ok(args.includes(image));

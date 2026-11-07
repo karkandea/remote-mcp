@@ -62,6 +62,9 @@ Example MCP arguments:
   `no-new-privileges`, user namespace, no host mounts. The only writable locations
   are transient 16 MiB `/work` and `/tmp` tmpfs filesystems. No host credentials or
   relay environment variables are forwarded to the container.
+- **Script transport:** Podman must run with `--interactive`; otherwise stdin closes,
+  Node silently exits with status 0, and no user script executes. The integration
+  smoke test must verify actual output, not just container exit code.
 - **Cleanup:** container `--rm` plus explicit `podman rm --force --ignore`
   after every job; fail-closed when cleanup cannot be verified. Stdout/stderr
   combined cap 32 KiB. Scripts are not stored on disk or in iteration notes.

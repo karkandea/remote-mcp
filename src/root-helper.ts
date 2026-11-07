@@ -74,7 +74,7 @@ export function buildSandboxPodmanArgs(config: SandboxConfig, name: string): str
     throw new Error('Invalid sandbox runtime configuration');
   }
   return [
-    'run', '--rm', '--name', name, '--pull=never',
+    'run', '--rm', '--interactive', '--name', name, '--pull=never',
     '--network=none', '--read-only', '--cap-drop=all',
     '--security-opt=no-new-privileges', '--pids-limit=32',
     '--memory=256m', '--memory-swap=256m', '--userns=keep-id',
