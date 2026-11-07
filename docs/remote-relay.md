@@ -35,6 +35,60 @@ flowchart TD
 4. Review Nginx reverse proxy paths `/mcp`, `/.well-known/oauth-protected-resource`, `/agent/ws`, and optionally `/healthz`. Forward the original `Authorization` header on both `/mcp` and `/agent/ws`, and forward WebSocket `Upgrade`/`Connection` headers. Require public HTTPS; do not disclose sensitive headers in logs. Rate-limit and cap request bodies. Never publish the loopback Node listener directly.
 5. Configure the Mac's allowed roots to a small, non-sensitive test directory; leave `allowWrites: false` and `commandProfiles: {}` until explicitly approved. Run the Mac agent as the standard non-admin account.
 
+## Isolated AI-authored JavaScript (VPS sandbox)
+
+The `sandbox_execute` MCP tool combines up to **8 independently validated read-only checks**
+(maximum 4 concurrently) with a single AI-authored JavaScript program.
+The script receives a JSON object named `MCP_INPUTS` with
+`{mode, operationCount, succeeded, elapsedMs, results}`. The operations complete
+before the script starts; the JavaScript **cannot issue arbitrary MCP calls**, invoke
+host tools, or mutate VPS/Mac files. Pass `operations: []` for pure computation.
+
+Example MCP arguments:
+
+```json
+{
+  "operations": [{"tool": "vps_host_status"}, {"tool": "vps_root_status"}],
+  "mode": "parallel",
+  "script": "console.log(JSON.stringify({checks:MCP_INPUTS.results.map(r=>({tool:r.tool,ok:r.ok}))}))"
+}
+```
+
+- **Execution:** pinned Node 22 Alpine image in **rootless Podman** under dedicated,
+  unprivileged `remote-mcp-sandbox` UID 1006. Never reuse the trusted CI runner.
+- **Hard limits:** 30 seconds, 256 MiB RAM (including swap), 1 host CPU via dedicated
+  `user-1006.slice` CPU quota, max 32 processes, **one active sandbox**.
+- **Isolation:** `--network=none`, read-only container, all capabilities dropped,
+  `no-new-privileges`, user namespace, no host mounts. The only writable locations
+  are transient 16 MiB `/work` and `/tmp` tmpfs filesystems. No host credentials or
+  relay environment variables are forwarded to the container.
+- **Cleanup:** container `--rm` plus explicit `podman rm --force --ignore`
+  after every job; fail-closed when cleanup cannot be verified. Stdout/stderr
+  combined cap 32 KiB. Scripts are not stored on disk or in iteration notes.
+- **Privacy:** explicit read-only operation results are provided to the script.
+  These may contain user-selected sensitive content, so request only the necessary
+  checks. The sandbox cannot fetch additional host files or contact the internet.
+- **Persistent learning:** separate `vps_iteration_record` / `vps_iteration_list`
+  store short improvement decisions, independently of ephemeral sandbox/container
+  and ordinary command-job garbage collection. Do not record secrets.
+
+VPS setup (one-time, by the administrator): create a dedicated no-login
+`remote-mcp-sandbox` account with UID 1006 and a private home;
+enable linger; set **persistent** `user-1006.slice` limits with
+`systemctl set-property user-1006.slice CPUQuota=100% MemoryMax=512M TasksMax=64`.
+As this Ubuntu 22.04 host does not delegate the CPU controller to rootless Podman,
+the dedicated user slice enforces the CPU cap. Pull the **exact digest-pinned**
+`docker.io/library/node` image as that dedicated account, and keep the
+configuration in `remote-mcp-root-helper.service` aligned with actual UID/image.
+The runtime validates the CPU/memory/task cgroup limits before each job and refuses
+execution if missing. Validate with `vps_sandbox_status`; do not loosen host
+filesystem permissions or Docker/socket privileges to make tests pass.
+
+This optional sandbox is for computation and transforming **prefetched read-only**
+results. It is intentionally not an unattended production deployment or write
+executor; those operations continue through their individually permissioned MCP
+tools. The high-risk MCP annotation on `sandbox_execute` is intentional.
+
 ## Optional file edits and system controls
 
 These capabilities are installed but **disabled for destructive actions by default**. The Mac owner enables them by editing the local `~/.config/remote-mcp/config.json` (mode `0600`). A remote caller cannot expand these permissions.

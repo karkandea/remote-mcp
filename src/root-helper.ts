@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { chmodSync, lstatSync, unlinkSync } from 'node:fs';
+import { chmodSync, lstatSync, readFileSync, unlinkSync } from 'node:fs';
 import { createConnection, createServer, type Server } from 'node:net';
 import path from 'node:path';
 import { z } from 'zod';
@@ -12,6 +12,9 @@ const operation = z.discriminatedUnion('action', [
     cwd: z.string().min(1).max(4096), timeoutMs: z.number().int().min(100).max(300_000) }).strict(),
   z.object({ action: z.literal('poll'), executionId: z.string().uuid() }).strict(),
   z.object({ action: z.literal('cancel'), executionId: z.string().uuid() }).strict(),
+  z.object({ action: z.literal('sandbox_status') }).strict(),
+  z.object({ action: z.literal('sandbox'), script: z.string().min(1).max(16_384),
+    inputsJson: z.string().max(64_000) }).strict(),
 ]);
 
 export type RootOperation = z.infer<typeof operation>;
@@ -33,6 +36,55 @@ const MAX_OUTPUT_BYTES = 65_536;
 const MAX_ROOT_CONCURRENT = 2;
 const MAX_ROOT_HISTORY = 100;
 const ROOT_HISTORY_TTL_MS = 15 * 60_000;
+
+// Never accept an image, user, runtime flag, path or command from the MCP caller.
+const SANDBOX_USER = 'remote-mcp-sandbox';
+const SANDBOX_HOME = '/var/lib/remote-mcp-sandbox';
+const SANDBOX_TIMEOUT_MS = 30_000;
+const MAX_SANDBOX_OUTPUT_BYTES = 32_768;
+const SANDBOX_IMAGE_PATTERN = /^docker\.io\/library\/node@sha256:[a-f0-9]{64}$/;
+
+type SandboxConfig = { image: string; uid: number; runtimeDirectory: string };
+function sandboxConfig(): SandboxConfig {
+  const image = process.env.REMOTE_MCP_SANDBOX_IMAGE ?? '';
+  const uid = Number(process.env.REMOTE_MCP_SANDBOX_UID);
+  if (!SANDBOX_IMAGE_PATTERN.test(image) || !Number.isInteger(uid) || uid < 1000 || uid > 60_000) {
+    throw new Error('Sandbox disabled: owner must configure a pinned Node image and dedicated UID');
+  }
+  // The host user slice supplies the one-core CPU cap where rootless Podman lacks
+  // CPU controller delegation; Podman separately enforces 256 MiB RAM / 32 PIDs.
+  const cgroup = '/sys/fs/cgroup/user.slice/user-' + uid + '.slice/';
+  const cpu = readFileSync(cgroup + 'cpu.max', 'utf8').trim().split(/\s+/).map(Number);
+  const memory = Number(readFileSync(cgroup + 'memory.max', 'utf8').trim());
+  const tasks = Number(readFileSync(cgroup + 'pids.max', 'utf8').trim());
+  if (!Number.isFinite(cpu[0]) || !Number.isFinite(cpu[1]) ||
+      cpu[0]! <= 0 || cpu[1]! <= 0 || cpu[0]! > cpu[1]! ||
+      !Number.isFinite(memory) || memory > 512 * 1024 * 1024 ||
+      !Number.isFinite(tasks) || tasks > 64) {
+    throw new Error('Sandbox disabled: dedicated user slice quotas are not enforced');
+  }
+  return { image, uid, runtimeDirectory: '/run/user/' + uid };
+}
+
+/** Exported for exact-argv security tests. No shell, host mounts, network or mutable image tags. */
+export function buildSandboxPodmanArgs(config: SandboxConfig, name: string): string[] {
+  if (!SANDBOX_IMAGE_PATTERN.test(config.image) ||
+      !/^remote-mcp-sandbox-[a-f0-9-]{36}$/.test(name) ||
+      !Number.isInteger(config.uid) || config.uid < 1000) {
+    throw new Error('Invalid sandbox runtime configuration');
+  }
+  return [
+    'run', '--rm', '--name', name, '--pull=never',
+    '--network=none', '--read-only', '--cap-drop=all',
+    '--security-opt=no-new-privileges', '--pids-limit=32',
+    '--memory=256m', '--memory-swap=256m', '--userns=keep-id',
+    '--user=' + config.uid + ':' + config.uid,
+    '--tmpfs=/tmp:rw,nosuid,nodev,size=16m,mode=1777',
+    '--tmpfs=/work:rw,nosuid,nodev,size=16m,mode=1777',
+    '--workdir=/work', '--env=HOME=/work', config.image,
+    'node', '--input-type=module', '-',
+  ];
+}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Unknown helper error';
@@ -59,12 +111,96 @@ function terminate(job: RootJob, status: 'cancelled' | 'timeout'): void {
   sendAudit(status, { executionId: job.executionId });
 }
 
+function sandboxHostEnv(config: SandboxConfig): NodeJS.ProcessEnv {
+  // Deliberately do not inherit relay, OAuth, proxy, SSH or root environment variables.
+  return { PATH: '/usr/bin:/bin', HOME: SANDBOX_HOME,
+    XDG_RUNTIME_DIR: config.runtimeDirectory, LANG: 'C.UTF-8' };
+}
+
+function runAsSandboxUser(config: SandboxConfig, args: string[]): ChildProcess {
+  return spawn('/usr/sbin/runuser', ['-u', SANDBOX_USER, '--', '/usr/bin/podman', ...args], {
+    cwd: SANDBOX_HOME, shell: false, detached: true,
+    stdio: ['pipe', 'pipe', 'pipe'], env: sandboxHostEnv(config),
+  });
+}
+
+async function removeSandboxContainer(config: SandboxConfig, name: string): Promise<void> {
+  const child = runAsSandboxUser(config, ['rm', '--force', '--ignore', name]);
+  child.stdin?.end();
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('Sandbox cleanup timed out')); }, 7_000);
+    timer.unref();
+    child.once('error', error => { clearTimeout(timer); reject(error); });
+    child.once('close', code => {
+      clearTimeout(timer);
+      if (code === 0) resolve(); else reject(new Error('Sandbox cleanup failed'));
+    });
+  });
+}
+
+async function executeSandbox(request: Extract<RootOperation, { action: 'sandbox' }>,
+  config: SandboxConfig): Promise<unknown> {
+  // Data is serialized into the container source, never used as shell syntax.
+  JSON.parse(request.inputsJson);
+  const source = 'const MCP_INPUTS = JSON.parse(' + JSON.stringify(request.inputsJson) + ');\n' +
+    request.script + '\n';
+  const name = 'remote-mcp-sandbox-' + randomUUID();
+  const startedAt = Date.now();
+  let stdout = '';
+  let stderr = '';
+  let truncated = false;
+  let timedOut = false;
+  const child = runAsSandboxUser(config, buildSandboxPodmanArgs(config, name));
+  const append = (key: 'stdout' | 'stderr', chunk: Buffer): void => {
+    const available = MAX_SANDBOX_OUTPUT_BYTES - Buffer.byteLength(stdout) - Buffer.byteLength(stderr);
+    if (available <= 0) { truncated = true; return; }
+    const part = chunk.subarray(0, available);
+    if (key === 'stdout') stdout += part.toString('utf8'); else stderr += part.toString('utf8');
+    if (part.byteLength < chunk.byteLength) truncated = true;
+  };
+  try {
+    const exitCode = await new Promise<number | null>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        timedOut = true;
+        try { if (child.pid) process.kill(-child.pid, 'SIGTERM'); else child.kill('SIGTERM'); }
+        catch { child.kill('SIGTERM'); }
+        setTimeout(() => {
+          if (child.exitCode === null) {
+            try { if (child.pid) process.kill(-child.pid, 'SIGKILL'); else child.kill('SIGKILL'); }
+            catch { /* exited */ }
+          }
+        }, 1_000).unref();
+      }, SANDBOX_TIMEOUT_MS);
+      timer.unref();
+      child.stdout?.on('data', (chunk: Buffer) => append('stdout', chunk));
+      child.stderr?.on('data', (chunk: Buffer) => append('stderr', chunk));
+      child.once('error', error => { clearTimeout(timer); reject(error); });
+      child.once('close', code => { clearTimeout(timer); resolve(code); });
+      child.stdin?.on('error', () => { /* Container rejected stdin; close event reports failure. */ });
+      child.stdin?.end(source);
+    });
+    return { status: timedOut ? 'timeout' : exitCode === 0 ? 'completed' : 'failed',
+      exitCode, stdout, stderr, truncated, elapsedMs: Date.now() - startedAt,
+      policy: { timeoutMs: SANDBOX_TIMEOUT_MS, memoryBytes: 256 * 1024 * 1024,
+        cpuCores: 1, maxProcesses: 32, network: 'none', maxConcurrent: 1,
+        filesystem: 'ephemeral tmpfs only', secretsForwarded: false },
+    };
+  } finally {
+    // Podman --rm normally cleans up; this also handles aborted CLI/transport.
+    await removeSandboxContainer(config, name).catch(() => {
+      throw new Error('Sandbox cleanup failed; inspect only the remote-mcp-sandbox-* container');
+    });
+  }
+}
+
 export async function startRootHelper(socketPath: string, options: { requireRoot?: boolean } = {}):
   Promise<{ close: () => Promise<void> }> {
   if (process.platform !== 'linux') throw new Error('Root helper requires Linux');
   if (options.requireRoot !== false && process.getuid?.() !== 0) throw new Error('Root helper requires root UID');
   if (!path.isAbsolute(socketPath)) throw new Error('Root socket path must be absolute');
   const jobs = new Map<string, RootJob>();
+  let sandboxBusy = false;
+  let sandboxCleanupFailed = false;
   const pruneJobs = (): void => {
     const now = Date.now();
     for (const [id, job] of jobs) {
@@ -82,11 +218,40 @@ export async function startRootHelper(socketPath: string, options: { requireRoot
   historyCleanup.unref();
 
   function handle(request: RootOperation): unknown {
+    if (request.action === 'sandbox_status') {
+      try {
+        const config = sandboxConfig();
+        return { enabled: !sandboxCleanupFailed, busy: sandboxBusy,
+          image: config.image, maxConcurrent: 1, timeoutMs: SANDBOX_TIMEOUT_MS,
+          memoryBytes: 256 * 1024 * 1024, cpuCores: 1, maxProcesses: 32,
+          network: 'none', secretsForwarded: false, cleanupHealthy: !sandboxCleanupFailed };
+      } catch {
+        return { enabled: false, busy: sandboxBusy, reason: 'Sandbox runtime not configured or quotas missing' };
+      }
+    }
+    if (request.action === 'sandbox') {
+      if (sandboxCleanupFailed) throw new Error('Sandbox disabled after incomplete cleanup');
+      if (sandboxBusy) throw new Error('At most one sandbox may run concurrently');
+      const config = sandboxConfig();
+      sandboxBusy = true;
+      sendAudit('sandbox_start', { kind: 'ephemeral', maxRuntimeMs: SANDBOX_TIMEOUT_MS });
+      return executeSandbox(request, config).then(result => {
+        sendAudit('sandbox_exit', { status: (result as { status: string }).status });
+        return result;
+      }, error => {
+        if (error instanceof Error && error.message.startsWith('Sandbox cleanup failed')) {
+          sandboxCleanupFailed = true;
+        }
+        sendAudit('sandbox_failure', { category: 'execution_or_cleanup' });
+        throw error;
+      }).finally(() => { sandboxBusy = false; });
+    }
     if (request.action === 'status') {
       pruneJobs();
       return { enabled: true, privileged: process.getuid?.() === 0,
         activeJobs: [...jobs.values()].filter(job => job.status === 'running').length,
-        retainedJobs: jobs.size, retainedJobsLimit: MAX_ROOT_HISTORY };
+        retainedJobs: jobs.size, retainedJobsLimit: MAX_ROOT_HISTORY,
+        sandboxActive: sandboxBusy, sandboxCleanupHealthy: !sandboxCleanupFailed };
     }
     if (request.action === 'poll' || request.action === 'cancel') {
       const job = jobs.get(request.executionId);
@@ -150,10 +315,15 @@ export async function startRootHelper(socketPath: string, options: { requireRoot
       const end = input.indexOf('\n');
       if (end === -1) return;
       socket.pause();
-      let response: unknown;
-      try { response = { ok: true, data: handle(operation.parse(JSON.parse(input.slice(0, end)))) }; }
-      catch (error) { response = { ok: false, error: errorMessage(error) }; }
-      socket.end(JSON.stringify(response) + '\n');
+      void (async () => {
+        let response: unknown;
+        try {
+          const request = operation.parse(JSON.parse(input.slice(0, end)));
+          if (request.action === 'sandbox') socket.setTimeout(45_000, () => socket.destroy());
+          response = { ok: true, data: await handle(request) };
+        } catch (error) { response = { ok: false, error: errorMessage(error) }; }
+        socket.end(JSON.stringify(response) + '\n');
+      })();
     });
   });
 
@@ -194,7 +364,8 @@ export async function callRootHelper(socketPath: string, request: RootOperation)
       socket.destroy();
       if (error) reject(error); else resolve(result);
     };
-    socket.setTimeout(7_000, () => finish(new Error('Root helper response timeout')));
+    socket.setTimeout(request.action === 'sandbox' ? 45_000 : 7_000,
+      () => finish(new Error('Root helper response timeout')));
     socket.on('connect', () => socket.write(payload));
     socket.on('error', error => finish(error));
     socket.on('end', () => { if (!settled) finish(new Error('Root helper closed before response')); });

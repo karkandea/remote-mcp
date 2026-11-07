@@ -4,7 +4,28 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
-import { callRootHelper, startRootHelper } from '../src/root-helper.js';
+import { buildSandboxPodmanArgs, callRootHelper, startRootHelper } from '../src/root-helper.js';
+
+test('sandbox Podman argv is pinned and contains mandatory isolation flags', () => {
+  const image = 'docker.io/library/node@sha256:' + 'a'.repeat(64);
+  const args = buildSandboxPodmanArgs({
+    image, uid: 1006, runtimeDirectory: '/run/user/1006',
+  }, 'remote-mcp-sandbox-00000000-0000-4000-8000-000000000000');
+  for (const flag of ['--network=none', '--read-only', '--cap-drop=all',
+    '--security-opt=no-new-privileges', '--pids-limit=32',
+    '--memory=256m', '--memory-swap=256m', '--userns=keep-id',
+    '--user=1006:1006', '--pull=never']) {
+    assert.ok(args.includes(flag), 'Missing sandbox flag ' + flag);
+  }
+  assert.ok(args.includes(image));
+  assert.ok(args.some(arg => arg.startsWith('--tmpfs=/work:')));
+  assert.ok(args.some(arg => arg.startsWith('--tmpfs=/tmp:')));
+  assert.ok(!args.some(arg => /^(--volume|--mount|-v|--privileged|--network=host)/.test(arg)));
+  assert.deepEqual(args.slice(-3), ['node', '--input-type=module', '-']);
+  assert.throws(() => buildSandboxPodmanArgs({
+    image: 'node:latest', uid: 1006, runtimeDirectory: '/run/user/1006',
+  }, 'remote-mcp-sandbox-00000000-0000-4000-8000-000000000000'), /Invalid sandbox/);
+});
 import { createProxyServer } from '../src/proxy-server.js';
 import { RelayChannel } from '../src/relay-channel.js';
 
@@ -16,6 +37,11 @@ test('root-helper Unix socket manages start, poll, cancellation, without any net
   try {
     const status = await callRootHelper(socket, { action: 'status' }) as { enabled: boolean };
     assert.equal(status.enabled, true);
+    const sandboxState = await callRootHelper(socket, { action: 'sandbox_status' }) as { enabled: boolean };
+    assert.equal(sandboxState.enabled, false);
+    await assert.rejects(callRootHelper(socket, {
+      action: 'sandbox', script: 'console.log(1)', inputsJson: '{}',
+    }), /Sandbox disabled/);
     const started = await callRootHelper(socket, { action: 'start', argv: [process.execPath,
       '-e', 'process.stdout.write("root-test")'], cwd: root, timeoutMs: 2000 }) as { executionId: string };
     let result: { status: string; stdout: string } | undefined;

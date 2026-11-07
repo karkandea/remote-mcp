@@ -9,6 +9,11 @@ User=root
 Group=remote-mcp
 WorkingDirectory=/opt/remote-mcp
 ExecStart=/usr/bin/node /opt/remote-mcp/dist/cli.js root-helper
+# Pinned immutable JavaScript sandbox image; dedicated unprivileged UID on this VPS.
+# Must also enforce user-1006.slice CPUQuota=100%, MemoryMax=512M, TasksMax=64.
+# If any sandbox quota is absent, root-helper disables sandbox execution.
+Environment=REMOTE_MCP_SANDBOX_IMAGE=docker.io/library/node@sha256:0e1754758c2df4cfa3e68d59e2e1b7374bb7fd9ea6328eaaacf15cc934af8202
+Environment=REMOTE_MCP_SANDBOX_UID=1006
 RuntimeDirectory=remote-mcp-root
 RuntimeDirectoryMode=0750
 UMask=0007

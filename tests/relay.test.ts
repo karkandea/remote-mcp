@@ -85,8 +85,12 @@ test('OAuth gate blocks anonymous callers; MCP request crosses VPS channel and r
       { authProvider: { token: async () => 'authorized-test-token' } });
     await client.connect(transport);
     const listed = await client.listTools();
-    assert.equal(listed.tools.length, 41);
+    assert.equal(listed.tools.length, 43);
     assert.ok(listed.tools.some(tool => tool.name === 'batch_read'));
+    assert.ok(listed.tools.some(tool => tool.name === 'vps_sandbox_status'));
+    assert.ok(listed.tools.some(tool => tool.name === 'sandbox_execute'));
+    assert.equal(listed.tools.find(tool => tool.name === 'sandbox_execute')?.annotations?.destructiveHint, true);
+    assert.equal(listed.tools.find(tool => tool.name === 'sandbox_execute')?.annotations?.openWorldHint, false);
     assert.ok(listed.tools.some(tool => tool.name === 'vps_host_status'));
     assert.equal(listed.tools.find(tool => tool.name === 'batch_read')?.annotations?.readOnlyHint, true);
     assert.ok(listed.tools.some(tool => tool.name === 'vps_storage_audit'));
@@ -101,6 +105,15 @@ test('OAuth gate blocks anonymous callers; MCP request crosses VPS channel and r
     } });
     assert.equal(rootDenied.isError, true);
     assert.match(JSON.stringify(rootDenied.content), /not enabled/);
+    const sandboxDenied = await client.callTool({ name: 'sandbox_execute', arguments: {
+      script: 'console.log(123)', operations: [{ tool: 'vps_host_status' }],
+    } });
+    assert.equal(sandboxDenied.isError, true);
+    assert.match(JSON.stringify(sandboxDenied.content), /not enabled/);
+    const sandboxRejectRootOperation = await client.callTool({ name: 'sandbox_execute', arguments: {
+      script: 'console.log(1)', operations: [{ tool: 'vps_root_exec', args: { argv: ['/usr/bin/id'] } }],
+    } });
+    assert.equal(sandboxRejectRootOperation.isError, true);
     const anonymousRoot = await fetch(`${base}/mcp`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'vps_root_exec',

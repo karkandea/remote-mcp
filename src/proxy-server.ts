@@ -77,6 +77,10 @@ export function createProxyServer(channel: RelayChannel, storageAudit: () => Pro
   server.registerTool('vps_root_status', { ...auth,
     description: 'Check whether the owner-enabled, high-risk VPS root executor is available (no elevated action)',
     annotations: { readOnlyHint: true }, inputSchema: z.object({}) }, () => rootCall({ action: 'status' }));
+  server.registerTool('vps_sandbox_status', { ...auth,
+    description: 'Read-only readiness and enforced resource limits of the separate unprivileged VPS JavaScript sandbox.',
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    inputSchema: z.object({}).strict() }, () => rootCall({ action: 'sandbox_status' }));
   server.registerTool('vps_root_exec', { ...auth,
     description: 'HIGH RISK: execute arbitrary argv as root on the VPS, with full filesystem and OS control. Use vps_root_poll for output. Only works when the separate root helper has been intentionally enabled.',
     annotations: { destructiveHint: true }, inputSchema: z.object({
@@ -200,16 +204,17 @@ export function createProxyServer(channel: RelayChannel, storageAudit: () => Pro
   };
   const batchToolNames = Object.keys(batchValidators) as [keyof typeof batchValidators,
     ...(keyof typeof batchValidators)[]];
-  server.registerTool('batch_read', { ...auth,
-    description: 'Run up to 8 independent READ-ONLY Mac/VPS checks in one call; 4 workers in parallel or sequential. Per-step errors are isolated. No shell, writes, root exec or script upload.',
-    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
-    inputSchema: z.object({
-      operations: z.array(z.object({
-        tool: z.enum(batchToolNames),
-        args: z.record(z.string(), z.unknown()).default({}),
-      }).strict()).min(1).max(8),
-      mode: z.enum(['parallel', 'sequential']).default('parallel'),
-    }).strict() }, async ({ operations, mode }) => {
+  const batchOperationSchema = z.object({
+    tool: z.enum(batchToolNames),
+    args: z.record(z.string(), z.unknown()).default({}),
+  }).strict();
+  const batchModeSchema = z.enum(['parallel', 'sequential']).default('parallel');
+  const batchReadSchema = z.object({
+    operations: z.array(batchOperationSchema).min(1).max(8),
+    mode: batchModeSchema,
+  }).strict();
+  type BatchRequest = z.infer<typeof batchReadSchema>;
+  async function executeReadBatch({ operations, mode }: BatchRequest) {
       const startedAt = Date.now();
       type BatchItem = { index: number; tool: string; ok: boolean; durationMs: number;
         data?: unknown; error?: unknown };
@@ -256,6 +261,49 @@ export function createProxyServer(channel: RelayChannel, storageAudit: () => Pro
         mode, operationCount: operations.length, succeeded: results.filter(item => item.ok).length,
         elapsedMs: Date.now() - startedAt, results,
       } }) }] };
-    });
+  }
+  server.registerTool('batch_read', { ...auth,
+    description: 'Run up to 8 independent READ-ONLY Mac/VPS checks in one call; 4 workers in parallel or sequential. Per-step errors are isolated. No shell, writes, root exec or script upload.',
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    inputSchema: batchReadSchema,
+  }, executeReadBatch);
+  server.registerTool('sandbox_execute', { ...auth,
+    description: 'Run an AI-authored JavaScript program in a no-network, no-host-mount, credential-free rootless Podman sandbox on the VPS. Optionally fetch up to 8 approved READ-ONLY checks first (max 4 parallel). The script reads a preloaded MCP_INPUTS variable containing {mode, operationCount, succeeded, elapsedMs, results}; print results using console.log. No arbitrary host MCP calls or writes; one sandbox at a time, 30s / 256MiB / 1CPU / 32 PIDs.',
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    inputSchema: z.object({
+      script: z.string().min(1).max(16_384),
+      operations: z.array(batchOperationSchema).max(8).default([]),
+      mode: batchModeSchema,
+    }).strict(),
+  }, async ({ script, operations, mode }) => {
+    try {
+      // Run all requested read-only tools within the same MCP request, then pass only
+      // their bounded output data to an isolated container; never pass relay env.
+      let batchData: unknown = {
+        mode, operationCount: 0, succeeded: 0, elapsedMs: 0, results: [],
+      };
+      if (operations.length) {
+        const batchResult = await executeReadBatch({ operations, mode });
+        const body = batchResult.content.find(item => item.type === 'text');
+        if (!body || body.type !== 'text') throw new AgentError('INVALID_REPLY', 'Batch returned no data');
+        const parsed = JSON.parse(body.text) as { ok: boolean; data?: unknown };
+        if (!parsed.ok) throw new AgentError('INVALID_REPLY', 'Batch failed');
+        batchData = parsed.data;
+      }
+      const inputsJson = JSON.stringify(batchData);
+      if (Buffer.byteLength(inputsJson) > 64_000) {
+        throw new AgentError('BATCH_RESULT_TOO_LARGE',
+          'Sandbox inputs exceed 64KB; narrow the read operations or use batch_read');
+      }
+      if (!rootHelperSocket) throw new AgentError('SANDBOX_DISABLED', 'Root helper not enabled');
+      const sandboxResult = await callRootHelper(rootHelperSocket, { action: 'sandbox', script, inputsJson });
+      const success = (sandboxResult as { status?: string }).status === 'completed';
+      return { ...(success ? {} : { isError: true }), content: [{ type: 'text' as const,
+        text: JSON.stringify({ ok: success, data: { batch: batchData, sandbox: sandboxResult } }) }] };
+    } catch (error) {
+      return { isError: true, content: [{ type: 'text' as const,
+        text: JSON.stringify({ ok: false, error: toResult(error) }) }] };
+    }
+  });
   return server;
 }
