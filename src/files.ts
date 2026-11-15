@@ -1,6 +1,6 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { constants } from 'node:fs';
-import { open, opendir, readdir, rename, stat, unlink, lstat } from 'node:fs/promises';
+import { link, open, opendir, readdir, rename, stat, unlink, lstat } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import type { AgentConfig } from './config.js';
@@ -26,7 +26,28 @@ async function readBounded(handle: FileHandle, maxBytes: number): Promise<Buffer
 }
 
 export class FileTools {
+  private readonly activeWrites = new Set<string>();
+
   constructor(private readonly policy: PathPolicy, private readonly config: AgentConfig) {}
+
+  private async withWrite(input: string, write: (target: string) => Promise<unknown>, create = false): Promise<unknown> {
+    const target = await this.policy.writePath(input, create);
+    const key = process.platform === 'win32' ? target.toLowerCase() : target;
+    if (this.activeWrites.has(key)) throw new AgentError('CONFLICT', 'Another write is in progress for this file');
+    this.activeWrites.add(key);
+    try { return await write(target); }
+    finally { this.activeWrites.delete(key); }
+  }
+
+  private async publishText(target: string, content: string, mode: number, publish: (tmp: string) => Promise<void>): Promise<void> {
+    const tmp = path.join(path.dirname(target), `.remote-mcp-${randomUUID()}.tmp`);
+    const tempHandle = await open(tmp, 'wx', mode);
+    try {
+      try { await tempHandle.writeFile(content, 'utf8'); await tempHandle.sync(); }
+      finally { await tempHandle.close(); }
+      await publish(tmp);
+    } finally { await unlink(tmp).catch(() => {}); }
+  }
 
   async list(input: string): Promise<unknown> {
     const target = await this.policy.readPath(input);
@@ -103,18 +124,53 @@ export class FileTools {
     return { query, matches, visitedFiles: visited, truncated: matches.length >= limit || visited >= 1000 };
   }
 
+  async create(input: string, content: string): Promise<unknown> {
+    return this.withWrite(input, async target => {
+      const bytes = Buffer.byteLength(content);
+      if (bytes > this.config.maxReadBytes) throw new AgentError('FILE_TOO_LARGE', 'File exceeds write limit');
+      if (content.includes('\0')) throw new AgentError('BINARY_FILE', 'Only UTF-8 text files are supported');
+      await this.publishText(target, content, 0o600, async tmp => {
+        if (await this.policy.writePath(input, true) !== target) {
+          throw new AgentError('PATH_CHANGED', 'Parent directory changed during creation');
+        }
+        // Linking publishes the complete file and fails if a destination already exists.
+        await link(tmp, target);
+      });
+      return { path: target, sha256: sha256(content), bytes };
+    }, true);
+  }
+
+  async delete(input: string, expectedSha256: string): Promise<unknown> {
+    return this.withWrite(input, async target => {
+      const current = await this.read(target) as { sha256: string };
+      if (current.sha256 !== expectedSha256) throw new AgentError('CONFLICT', 'File hash differs from expectedSha256');
+      if (await this.policy.writePath(input) !== target) throw new AgentError('PATH_CHANGED', 'File path changed during removal');
+      await unlink(target);
+      return { path: target, sha256: current.sha256, deleted: true };
+    });
+  }
+
   async applyPatch(input: string, expectedText: string, replacementText: string, expectedSha256?: string): Promise<unknown> {
+    return this.withWrite(input, target => this.patchFile(target, expectedText, replacementText, expectedSha256));
+  }
+
+  private async patchFile(target: string, expectedText: string, replacementText: string, expectedSha256?: string): Promise<unknown> {
     if (!expectedText || expectedText === replacementText) throw new AgentError('INVALID_PATCH', 'Expected and replacement text must differ, and expectedText must be nonempty');
     if (Buffer.byteLength(replacementText) > this.config.maxReadBytes || Buffer.byteLength(expectedText) > this.config.maxReadBytes) {
       throw new AgentError('FILE_TOO_LARGE', 'Patch text exceeds maxReadBytes');
     }
-    const target = await this.policy.writePath(input);
-    const handle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const handle = await open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
     let original: Buffer;
     let mode: number;
     try {
       const info = await handle.stat();
       if (!info.isFile() || info.size > this.config.maxReadBytes) throw new AgentError('FILE_TOO_LARGE', 'Target is not a supported regular file');
+      if (process.platform === 'win32') {
+        const checked = await stat(await this.policy.readPath(target));
+        if (checked.dev !== info.dev || checked.ino !== info.ino) {
+          throw new AgentError('PATH_CHANGED', 'File changed while opening it');
+        }
+      }
       mode = info.mode & 0o777;
       original = await readBounded(handle, this.config.maxReadBytes);
     } finally { await handle.close(); }
@@ -127,23 +183,20 @@ export class FileTools {
     if (start === -1 || content.indexOf(expectedText, start + expectedText.length) !== -1) {
       throw new AgentError('CONFLICT', 'Expected text must occur exactly once');
     }
-    const changed = content.slice(0, start) + replacementText + content.slice(start + expectedText.length);
+    const patched = content.slice(0, start) + replacementText + content.slice(start + expectedText.length);
+    const changed = process.platform === 'win32' && original.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf]))
+      ? '\uFEFF' + patched : patched;
     if (Buffer.byteLength(changed) > this.config.maxReadBytes) throw new AgentError('FILE_TOO_LARGE', 'Patched file exceeds maxReadBytes');
-    const tmp = path.join(path.dirname(target), `.remote-mcp-${randomUUID()}.tmp`);
-    try {
-      const tempHandle = await open(tmp, 'wx', mode);
-      try { await tempHandle.writeFile(changed, 'utf8'); await tempHandle.sync(); }
-      finally { await tempHandle.close(); }
+    if (process.platform === 'win32' && changed.includes('\0')) throw new AgentError('BINARY_FILE', 'Only UTF-8 text files are supported');
+    await this.publishText(target, changed, mode, async tmp => {
       // Best-effort concurrency detection; not a hardened transactional filesystem sandbox.
       const current = await this.policy.writePath(target);
-      const verify = await open(current, constants.O_RDONLY | constants.O_NOFOLLOW);
+      if (current !== target) throw new AgentError('PATH_CHANGED', 'Parent directory changed during patch');
+      const verify = await open(current, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
       try { if (sha256(await readBounded(verify, this.config.maxReadBytes)) !== initialHash) throw new AgentError('CONFLICT', 'File changed during patch'); }
       finally { await verify.close(); }
       await rename(tmp, target);
-    } catch (error) {
-      await unlink(tmp).catch(() => {});
-      throw error;
-    }
+    });
     return { path: target, beforeSha256: initialHash, afterSha256: sha256(changed), bytes: Buffer.byteLength(changed) };
   }
 }

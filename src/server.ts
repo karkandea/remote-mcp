@@ -10,6 +10,7 @@ import { IphoneTools } from './iphone.js';
 import { PathPolicy } from './policy.js';
 import { ProcessTools } from './processes.js';
 import { SystemTools } from './system.js';
+import { WINDOWS_WRITE_TOOLS } from './windows-device.js';
 
 export type AgentContext = {
   config: AgentConfig;
@@ -28,7 +29,7 @@ export async function createContext(config: AgentConfig, device = new DeviceStat
     processes: new ProcessTools(config), system: new SystemTools(config), iphone: new IphoneTools(config.iphoneControl) };
 }
 
-export function createServer(ctx: AgentContext, resumeCommand = 'remote-mcp resume'): McpServer {
+export function createServer(ctx: AgentContext, resumeCommand = 'remote-mcp resume', windows = false): McpServer {
   const server = new McpServer({ name: 'remote-mcp', version: '0.1.0-alpha.1' });
   const wrap = <T>(name: string, action: (args: T) => Promise<unknown> | unknown, allowDisconnected = false) =>
     async (args: T) => {
@@ -58,10 +59,19 @@ export function createServer(ctx: AgentContext, resumeCommand = 'remote-mcp resu
     inputSchema: z.object({ directory: z.string(), query: z.string().min(1), limit: z.number().int().min(1).max(100).default(50) }) },
     wrap('fs_search', ({ directory, query, limit }: { directory: string; query: string; limit: number }) => ctx.files.search(directory, query, limit)));
   server.registerTool('fs_apply_patch', { description: 'Replace exactly one expected text occurrence; requires local write enablement',
-    inputSchema: z.object({ path: z.string(), expectedText: z.string().min(1), replacementText: z.string(), expectedSha256: z.string().length(64).optional() }) },
+    inputSchema: windows ? WINDOWS_WRITE_TOOLS.fs_apply_patch
+      : z.object({ path: z.string(), expectedText: z.string().min(1), replacementText: z.string(), expectedSha256: z.string().length(64).optional() }) },
     wrap('fs_apply_patch', ({ path, expectedText, replacementText, expectedSha256 }: {
       path: string; expectedText: string; replacementText: string; expectedSha256?: string;
     }) => ctx.files.applyPatch(path, expectedText, replacementText, expectedSha256)));
+  if (windows) {
+    server.registerTool('fs_create', { description: 'Create a UTF-8 file without overwriting',
+      inputSchema: WINDOWS_WRITE_TOOLS.fs_create },
+    wrap('fs_create', ({ path, content }: { path: string; content: string }) => ctx.files.create(path, content)));
+    server.registerTool('fs_delete', { description: 'Delete a UTF-8 file whose SHA-256 still matches',
+      inputSchema: WINDOWS_WRITE_TOOLS.fs_delete },
+    wrap('fs_delete', ({ path, expectedSha256 }: { path: string; expectedSha256: string }) => ctx.files.delete(path, expectedSha256)));
+  }
   server.registerTool('process_list', { description: 'List up to 100 processes owned by the Mac user; no command-line arguments',
     inputSchema: z.object({ filter: z.string().min(1).max(100).optional() }) },
     wrap('process_list', ({ filter }: { filter?: string }) => ctx.processes.list(filter)));

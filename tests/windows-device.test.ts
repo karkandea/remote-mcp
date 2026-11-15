@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -10,7 +10,8 @@ import { configSchema } from '../src/config.js';
 import { isLocalWindowsPath } from '../src/policy.js';
 import { runRemoteAgent } from '../src/remote-agent.js';
 import { startRelayServer, validateRelayConfig, type RelayConfig } from '../src/relay-server.js';
-import { DEVICE_HEADER, deviceFingerprint, enrollWindowsDevice, loadWindowsDevice, windowsFingerprint } from '../src/windows-device.js';
+import { DEVICE_HEADER, deviceFingerprint, enrollWindowsDevice, loadWindowsDevice, setWindowsWrites,
+  windowsFingerprint } from '../src/windows-device.js';
 
 const macToken = 'f'.repeat(64);
 const relayConfig: RelayConfig = {
@@ -54,6 +55,7 @@ test('Windows enrollment is owner scoped and routes independently of the legacy 
   assert.equal(await windowsFingerprint(privateDir), fingerprint);
   await assert.rejects(enrollWindowsDevice(privateDir, relayUrl, windowsRoot), /already initialized/);
   const windows = await loadWindowsDevice(privateDir);
+  assert.equal(windows.config.allowWrites, false);
   assert.equal(deviceFingerprint(windows.token), fingerprint);
   assert.notEqual(windows.token, fingerprint);
   assert.throws(() => validateRelayConfig({ ...relayConfig, windowsDeviceFingerprint: deviceFingerprint(macToken) }),
@@ -63,6 +65,7 @@ test('Windows enrollment is owner scoped and routes independently of the legacy 
   const client = new Client({ name: 'windows-routing-test', version: '1.0.0' });
   const macAbort = new AbortController();
   const windowsAbort = new AbortController();
+  const windowsWriteAbort = new AbortController();
   const agents: Promise<void>[] = [];
   const ws = `ws://127.0.0.1:${relay.port}/agent/ws`;
   const endpoint = `http://127.0.0.1:${relay.port}/mcp`;
@@ -91,6 +94,9 @@ test('Windows enrollment is owner scoped and routes independently of the legacy 
       { authProvider: { token: async () => 'test-owner' } }));
     const listed = (await client.listTools()).tools.map(tool => tool.name);
     assert.ok(listed.includes('windows_fs_read'));
+    assert.ok(listed.includes('windows_fs_create'));
+    assert.ok(listed.includes('windows_fs_apply_patch'));
+    assert.ok(listed.includes('windows_fs_delete'));
     assert.ok(!listed.includes('windows_terminal_start'));
     assert.equal(await forbidden(macToken, 'windows'), 403);
     assert.equal(await forbidden(windows.token), 403);
@@ -100,10 +106,27 @@ test('Windows enrollment is owner scoped and routes independently of the legacy 
     const unauthorized = await fetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'windows_device_status' } }) });
     assert.equal(unauthorized.status, 401);
+    const legacySocket = new WebSocket(ws, { headers: { Authorization: `Bearer ${windows.token}`,
+      [DEVICE_HEADER]: 'windows' } });
+    const legacyClosed = Promise.withResolvers<void>();
+    legacySocket.once('close', legacyClosed.resolve);
+    await new Promise<void>((resolve, reject) => {
+      legacySocket.once('open', resolve);
+      legacySocket.once('error', reject);
+    });
+    const createdFile = path.join(windowsRoot, 'new.txt');
+    const createArgs = { path: createdFile, content: 'hello\n' };
+    try {
+      assert.match(JSON.stringify((await call('windows_fs_create', createArgs)).content), /AGENT_UPDATE_REQUIRED/);
+    } finally {
+      legacySocket.close();
+      await legacyClosed.promise;
+    }
     await connect(windows.config, windows.token, windowsAbort.signal, true);
     assert.match(JSON.stringify((await call('windows_fs_read', { path: windowsFile })).content), /Windows fixture/);
     assert.match(JSON.stringify((await call('windows_fs_search', { directory: windowsRoot, query: 'fixture' })).content),
       /example.txt/);
+    assert.match(JSON.stringify((await call('windows_fs_create', createArgs)).content), /WRITE_DISABLED/);
     assert.match(JSON.stringify((await call('fs_read', { path: macFile })).content), /Mac agent is offline/);
     assert.equal(await forbidden(windows.token, 'windows'), 403);
     await connect(configSchema.parse({ allowedRoots: [macRoot] }), macToken, macAbort.signal);
@@ -116,9 +139,49 @@ test('Windows enrollment is owner scoped and routes independently of the legacy 
     assert.match(JSON.stringify((await call('fs_read', { path: macFile })).content), /Mac fixture/);
     await windows.device.resumeLocally();
     assert.match(JSON.stringify((await call('windows_fs_read', { path: windowsFile })).content), /Windows fixture/);
+
+    windowsAbort.abort();
+    await agents[0];
+    for (let tries = 0; tries < 100; tries++) {
+      if (JSON.stringify((await call('windows_device_status')).content).includes('Windows agent is offline')) break;
+      await delay(10);
+    }
+    await setWindowsWrites(privateDir, true);
+    const writable = await loadWindowsDevice(privateDir);
+    assert.equal(writable.token, windows.token);
+    await connect(writable.config, writable.token, windowsWriteAbort.signal, true);
+    const data = async (name: string, args: Record<string, unknown> = {}) => {
+      const item = (await call(name, args)).content?.[0];
+      assert.ok(item?.type === 'text');
+      return JSON.parse(item.text);
+    };
+    assert.equal((await data('windows_device_status')).data.writesEnabled, true);
+    const created = await data('windows_fs_create', createArgs);
+    assert.equal(created.ok, true);
+    assert.equal(await readFile(createdFile, 'utf8'), createArgs.content);
+    assert.equal((await data('windows_fs_create', { ...createArgs, content: 'different' })).error.code, 'EEXIST');
+    const patch = { path: createdFile, expectedText: 'hello', replacementText: 'halo',
+      expectedSha256: created.data.sha256 };
+    const patched = await data('windows_fs_apply_patch', patch);
+    assert.equal(patched.ok, true);
+    assert.equal((await data('windows_fs_read', { path: createdFile })).data.content, 'halo\n');
+    assert.equal((await data('windows_fs_apply_patch', patch)).error.code, 'CONFLICT');
+    const deletion = { path: createdFile, expectedSha256: patched.data.afterSha256 };
+    assert.equal((await data('windows_fs_delete', { ...deletion, expectedSha256: created.data.sha256 })).error.code, 'CONFLICT');
+    assert.equal((await data('windows_fs_delete', deletion)).ok, true);
+    await assert.rejects(readFile(createdFile), { code: 'ENOENT' });
+    assert.equal((await data('windows_fs_create', { ...createArgs, path: path.join(macRoot, 'new.txt') })).error.code, 'PATH_DENIED');
+    assert.equal((await data('windows_fs_create', { ...createArgs, path: path.join(windowsRoot, '.env') })).error.code, 'SENSITIVE_PATH');
+    const junction = path.join(windowsRoot, 'outside');
+    await symlink(macRoot, junction, 'junction');
+    assert.equal((await data('windows_fs_create', { ...createArgs, path: path.join(junction, 'new.txt') })).error.code, 'PATH_DENIED');
+    await setWindowsWrites(privateDir, false);
+    await setWindowsWrites(privateDir, false);
+    assert.equal((await loadWindowsDevice(privateDir)).config.allowWrites, false);
   } finally {
     macAbort.abort();
     windowsAbort.abort();
+    windowsWriteAbort.abort();
     await Promise.allSettled(agents);
     await client.close();
     await relay.close();

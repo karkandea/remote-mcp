@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
@@ -9,6 +9,13 @@ import { AgentError } from './errors.js';
 import { PathPolicy } from './policy.js';
 
 export const DEVICE_HEADER = 'x-remote-mcp-device';
+export const WINDOWS_FILE_WRITES_HEADER = 'x-remote-mcp-windows-file-writes';
+export const WINDOWS_WRITE_TOOLS = {
+  fs_create: z.object({ path: z.string(), content: z.string() }),
+  fs_apply_patch: z.object({ path: z.string(), expectedText: z.string().min(1), replacementText: z.string(),
+    expectedSha256: z.string().regex(/^[a-f0-9]{64}$/) }),
+  fs_delete: z.object({ path: z.string(), expectedSha256: z.string().regex(/^[a-f0-9]{64}$/) }),
+};
 export const WINDOWS_TOOLS = {
   fs_list: z.object({ path: z.string() }),
   fs_read: z.object({ path: z.string() }),
@@ -17,6 +24,7 @@ export const WINDOWS_TOOLS = {
     limit: z.number().int().min(1).max(100).default(50) }),
   device_status: z.object({}),
   device_disconnect: z.object({}),
+  ...WINDOWS_WRITE_TOOLS,
 };
 
 const enrollmentSchema = z.object({
@@ -82,8 +90,22 @@ export async function windowsFingerprint(directory: string): Promise<string> {
   return deviceFingerprint((await readEnrollment(directory)).token);
 }
 
+export async function setWindowsWrites(directory: string, enabled: boolean): Promise<void> {
+  await readEnrollment(directory);
+  const setting = path.join(directory, 'allow-file-writes');
+  if (enabled) await writeFile(setting, 'enabled\n', { mode: 0o600 });
+  else await rm(setting, { force: true });
+}
+
 export async function loadWindowsDevice(directory: string) {
   const enrollment = await readEnrollment(directory);
-  return { config: await windowsConfig(directory, enrollment.allowedRoot),
+  const config = await windowsConfig(directory, enrollment.allowedRoot);
+  const allowWrites = await readFile(path.join(directory, 'allow-file-writes'), 'utf8').then(
+    value => value === 'enabled\n',
+    error => {
+      if (error.code === 'ENOENT') return false;
+      throw error;
+    });
+  return { config: { ...config, allowWrites },
     device: windowsDeviceState(directory), url: enrollment.relayUrl, token: enrollment.token };
 }

@@ -73,14 +73,16 @@ export class PathPolicy {
     return canonical;
   }
 
-  async writePath(input: string): Promise<string> {
+  async writePath(input: string, create = false): Promise<string> {
     if (!this.config.allowWrites) throw new AgentError('WRITE_DISABLED', 'Write permission is disabled in config');
-    if (!path.isAbsolute(input)) throw new AgentError('INVALID_PATH', 'An absolute path is required');
+    assertAbsolutePath(input);
     const normalized = path.resolve(input);
     this.denySensitive(normalized);
     const parent = await realpath(path.dirname(normalized));
     const resolved = path.join(parent, path.basename(normalized));
+    if (process.platform === 'win32') assertAbsolutePath(resolved);
     this.ensureAllowed(resolved);
+    if (create) return resolved;
     const info = await lstat(resolved);
     if (info.isSymbolicLink() || !info.isFile()) {
       throw new AgentError('INVALID_FILE', 'Only existing regular files may be modified');
