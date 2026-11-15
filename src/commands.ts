@@ -1,5 +1,6 @@
 import { spawn, execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { stat } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import type { AgentConfig } from './config.js';
@@ -89,6 +90,38 @@ export class CommandTools {
     return this.launch('full-user', argv[0]!, argv.slice(1), cwd, timeoutMs);
   }
 
+  async startWindowsPackage(id: string, operation: 'show' | 'list' | 'install'): Promise<unknown> {
+    const approved = this.config.windowsPackages.find(item => item.toLowerCase() === id.toLowerCase());
+    if (!approved) throw new AgentError('PACKAGE_DENIED', 'Package ID is outside the local Windows approvals');
+    if (process.platform !== 'win32' || !process.env.LOCALAPPDATA || !path.isAbsolute(process.env.LOCALAPPDATA)) {
+      throw new AgentError('WINGET_UNAVAILABLE', 'WinGet requires a Windows account with App Installer');
+    }
+    const executable = path.join(process.env.LOCALAPPDATA, 'Microsoft', 'WindowsApps', 'winget.exe');
+    if (!(await stat(executable).then(info => info.isFile(), () => false))) {
+      throw new AgentError('WINGET_UNAVAILABLE', 'WinGet is not available under the Windows agent account');
+    }
+    const profile = `winget:${operation}:${approved}`;
+    this.pruneJobs();
+    const running = [...this.jobs.values()].find(job => job.status === 'running' && job.profile === profile);
+    if (running) return { executionId: running.id, status: running.status, profile };
+    if (operation === 'install' && [...this.jobs.values()].some(job =>
+      job.status === 'running' && job.profile.startsWith('winget:install:'))) {
+      throw new AgentError('BUSY', 'A WinGet installation is already running');
+    }
+    const args = [operation, '--id', approved, '--exact', '--source', 'winget',
+      '--disable-interactivity', '--accept-source-agreements'];
+    if (operation === 'install') args.push('--silent', '--no-upgrade', '--accept-package-agreements');
+    return this.launch(profile, executable, args, process.env.LOCALAPPDATA,
+      operation === 'install' ? 30 * 60_000 : 90_000);
+  }
+
+  pollWindowsPackage(id: string): unknown {
+    if (!this.jobs.get(id)?.profile.startsWith('winget:')) {
+      throw new AgentError('NOT_FOUND', 'Unknown WinGet job ID');
+    }
+    return this.poll(id);
+  }
+
   private launch(profileName: string, executable: string, args: string[], cwd: string, timeoutMs: number): unknown {
     this.pruneJobs();
     if ([...this.jobs.values()].filter(job => job.status === 'running').length >= MAX_CONCURRENT_JOBS) {
@@ -100,7 +133,7 @@ export class CommandTools {
     delete env.REMOTE_MCP_RELAY_WS;
     const child = spawn(executable, args, {
       cwd, shell: false, detached: process.platform !== 'win32',
-      stdio: ['ignore', 'pipe', 'pipe'], env,
+      stdio: ['ignore', 'pipe', 'pipe'], env, windowsHide: true,
     });
     let timer: NodeJS.Timeout;
     const job: Running = { id, profile: profileName, status: 'running', startedAt: new Date().toISOString(),

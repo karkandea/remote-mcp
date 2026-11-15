@@ -10,7 +10,7 @@ import { IphoneTools } from './iphone.js';
 import { PathPolicy } from './policy.js';
 import { ProcessTools } from './processes.js';
 import { SystemTools } from './system.js';
-import { WINDOWS_WRITE_TOOLS } from './windows-device.js';
+import { WINDOWS_PACKAGE_TOOLS, WINDOWS_WRITE_TOOLS } from './windows-device.js';
 
 export type AgentContext = {
   config: AgentConfig;
@@ -65,6 +65,19 @@ export function createServer(ctx: AgentContext, resumeCommand = 'remote-mcp resu
       path: string; expectedText: string; replacementText: string; expectedSha256?: string;
     }) => ctx.files.applyPatch(path, expectedText, replacementText, expectedSha256)));
   if (windows) {
+    server.registerTool('package_catalog', { description: 'List locally approved Windows package IDs',
+      inputSchema: WINDOWS_PACKAGE_TOOLS.package_catalog },
+    wrap('package_catalog', () => ({ source: 'winget', approved: ctx.config.windowsPackages })));
+    server.registerTool('package_query', { description: 'Look up an approved package or its installed version',
+      inputSchema: WINDOWS_PACKAGE_TOOLS.package_query },
+    wrap('package_query', ({ id, mode }: { id: string; mode: 'available' | 'installed' }) =>
+      ctx.commands.startWindowsPackage(id, mode === 'available' ? 'show' : 'list')));
+    server.registerTool('package_install', { description: 'Install an approved package from WinGet',
+      inputSchema: WINDOWS_PACKAGE_TOOLS.package_install },
+    wrap('package_install', ({ id }: { id: string }) => ctx.commands.startWindowsPackage(id, 'install')));
+    server.registerTool('package_job', { description: 'Read the status and output of a WinGet job',
+      inputSchema: WINDOWS_PACKAGE_TOOLS.package_job },
+    wrap('package_job', ({ executionId }: { executionId: string }) => ctx.commands.pollWindowsPackage(executionId)));
     server.registerTool('fs_create', { description: 'Create a UTF-8 file without overwriting',
       inputSchema: WINDOWS_WRITE_TOOLS.fs_create },
     wrap('fs_create', ({ path, content }: { path: string; content: string }) => ctx.files.create(path, content)));

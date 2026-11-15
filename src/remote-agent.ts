@@ -8,7 +8,7 @@ import { AgentError } from './errors.js';
 import { MAX_FRAME_BYTES, toolUnavailable, type RelayCall, type RelayReply } from './relay-channel.js';
 import { createContext, createServer } from './server.js';
 import { monitorWebSocketHeartbeat } from './websocket-heartbeat.js';
-import { DEVICE_HEADER, WINDOWS_FILE_WRITES_HEADER, WINDOWS_TOOLS } from './windows-device.js';
+import { DEVICE_HEADER, WINDOWS_FILE_WRITES_HEADER, WINDOWS_PACKAGES_HEADER, WINDOWS_TOOLS } from './windows-device.js';
 
 export type DisconnectEvent = {
   closeCode: number;
@@ -67,6 +67,7 @@ export async function runRemoteAgent(config: AgentConfig, options: AgentConnecti
     if (windows) {
       headers[DEVICE_HEADER] = 'windows';
       headers[WINDOWS_FILE_WRITES_HEADER] = '1';
+      headers[WINDOWS_PACKAGES_HEADER] = '1';
     }
     let retryAttempt = 0;
     while (!options.signal?.aborted) {
