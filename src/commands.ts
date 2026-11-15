@@ -1,6 +1,5 @@
 import { spawn, execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { stat } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import type { AgentConfig } from './config.js';
@@ -97,9 +96,7 @@ export class CommandTools {
       throw new AgentError('WINGET_UNAVAILABLE', 'WinGet requires a Windows account with App Installer');
     }
     const executable = path.join(process.env.LOCALAPPDATA, 'Microsoft', 'WindowsApps', 'winget.exe');
-    if (!(await stat(executable).then(info => info.isFile(), () => false))) {
-      throw new AgentError('WINGET_UNAVAILABLE', 'WinGet is not available under the Windows agent account');
-    }
+    // App Execution Aliases are reparse points. Let CreateProcess resolve the fixed alias.
     const profile = `winget:${operation}:${approved}`;
     this.pruneJobs();
     const running = [...this.jobs.values()].find(job => job.status === 'running' && job.profile === profile);
