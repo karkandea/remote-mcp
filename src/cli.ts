@@ -7,7 +7,7 @@ import { toResult } from './errors.js';
 import { runRemoteAgent, validateAgentUrl, type AgentConnectionOptions } from './remote-agent.js';
 import { relayConfigFromEnv, startRelayServer } from './relay-server.js';
 import { startRootHelper } from './root-helper.js';
-import { enrollWindowsDevice, loadWindowsDevice, setWindowsWrites, windowsAgentDirectory,
+import { enrollWindowsDevice, loadWindowsDevice, setWindowsPackages, setWindowsWrites, windowsAgentDirectory,
   windowsDeviceState, windowsFingerprint } from './windows-device.js';
 
 function agentConnectionOptions(): Pick<AgentConnectionOptions, 'signal' | 'onConnect' | 'onDisconnect'> {
@@ -74,6 +74,12 @@ async function main(): Promise<void> {
       process.stdout.write(`Windows file writes ${enabled ? 'enabled' : 'disabled'}. Restart windows-agent to apply.\n`);
       return;
     }
+    case 'windows-approve-packages': {
+      const ids = process.argv.slice(3);
+      await setWindowsPackages(windowsAgentDirectory(), ids);
+      process.stdout.write('Windows package permissions saved. Restart windows-agent to apply.\n');
+      return;
+    }
     case 'relay': {
       const relay = await startRelayServer(relayConfigFromEnv());
       process.stderr.write(`Relay listening on 127.0.0.1:${relay.port}\n`);
@@ -124,7 +130,7 @@ async function main(): Promise<void> {
       process.stdout.write('Local access re-enabled. Restart the MCP host connection.\n');
       return;
     default:
-      process.stdout.write('Usage: remote-mcp <init|start|agent|relay|root-helper|stop|resume|status|doctor|config|windows-init|windows-fingerprint|windows-agent|windows-stop|windows-resume|windows-enable-writes|windows-disable-writes>\n');
+      process.stdout.write('Usage: remote-mcp <init|start|agent|relay|root-helper|stop|resume|status|doctor|config|windows-init|windows-fingerprint|windows-agent|windows-stop|windows-resume|windows-enable-writes|windows-disable-writes|windows-approve-packages>\n');
       if (command !== 'help') process.exitCode = 2;
   }
 }

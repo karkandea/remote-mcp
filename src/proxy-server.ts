@@ -20,13 +20,18 @@ export function createProxyServer(channel: RelayChannel, storageAudit: () => Pro
       fs_create: 'Create a small UTF-8 file in the approved Windows folder without overwriting an existing file',
       fs_apply_patch: 'Replace one occurrence in a UTF-8 file in the approved Windows folder, using the SHA-256 from windows_fs_read',
       fs_delete: 'Permanently delete a small UTF-8 file in the approved Windows folder, using the SHA-256 from windows_fs_read',
+      package_catalog: 'List locally approved Windows Package Manager package IDs',
+      package_query: 'Look up an approved package or installed version. Poll windows_package_job for the result',
+      package_install: 'Install a locally approved WinGet package without upgrading an installed copy. Poll windows_package_job for the result',
+      package_job: 'Read status and output from a Windows Package Manager job',
       device_status: 'Show connected Windows device status and its approved folder',
       device_disconnect: 'Revoke access until the Windows owner resumes locally',
     };
     for (const name of Object.keys(WINDOWS_TOOLS) as Array<keyof typeof WINDOWS_TOOLS>) {
       server.registerTool(`windows_${name}`, { ...auth, description: descriptions[name],
-        annotations: { readOnlyHint: name !== 'device_disconnect' && !Object.hasOwn(WINDOWS_WRITE_TOOLS, name),
-          destructiveHint: name === 'fs_apply_patch' || name === 'fs_delete', openWorldHint: false },
+        annotations: { readOnlyHint: name !== 'device_disconnect' && name !== 'package_install' &&
+          !Object.hasOwn(WINDOWS_WRITE_TOOLS, name), destructiveHint: name === 'fs_apply_patch' || name === 'fs_delete',
+          openWorldHint: name === 'package_install' || name === 'package_query' },
         inputSchema: WINDOWS_TOOLS[name] },
       (args: Record<string, unknown>) => windows.call(name, args, true));
     }

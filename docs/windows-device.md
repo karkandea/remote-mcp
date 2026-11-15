@@ -40,6 +40,22 @@ Write tools operate on bounded UTF-8 files within the approved folder. `windows_
 
 To disable writes, run `node .\dist\cli.js windows-disable-writes` or `4-Disable-Windows-Writes.cmd` and restart the agent.
 
+## Use Windows Package Manager
+
+The Windows owner can approve exact WinGet IDs locally, then restart the agent.
+
+```powershell
+node .\dist\cli.js windows-approve-packages CodeBlocks.CodeBlocks.MinGW
+```
+
+The command replaces the current approvals. Run it without IDs to clear the approvals.
+`windows_package_catalog` shows the approvals. `windows_package_query` looks up an
+approved ID in WinGet or checks whether that ID is installed. `windows_package_install`
+starts an installation, and `windows_package_job` reports its exit code and output.
+Both query and install use the WinGet community source and match the package ID exactly.
+Installers run under the Windows agent account, so packages that require an elevation
+prompt may require action at the laptop. Install requests skip upgrades.
+
 Press Ctrl+C in the agent window to take it offline. To persistently revoke Windows file access, run `node .\dist\cli.js windows-stop` or call `windows_device_disconnect` from the MCP client. To re-enable it, run `node .\dist\cli.js windows-resume` locally and start the agent if needed.
 
 ## On the relay

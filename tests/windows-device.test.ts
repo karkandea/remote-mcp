@@ -10,7 +10,7 @@ import { configSchema } from '../src/config.js';
 import { isLocalWindowsPath } from '../src/policy.js';
 import { runRemoteAgent } from '../src/remote-agent.js';
 import { startRelayServer, validateRelayConfig, type RelayConfig } from '../src/relay-server.js';
-import { DEVICE_HEADER, deviceFingerprint, enrollWindowsDevice, loadWindowsDevice, setWindowsWrites,
+import { DEVICE_HEADER, deviceFingerprint, enrollWindowsDevice, loadWindowsDevice, setWindowsPackages, setWindowsWrites,
   windowsFingerprint } from '../src/windows-device.js';
 
 const macToken = 'f'.repeat(64);
@@ -56,6 +56,8 @@ test('Windows enrollment is owner scoped and routes independently of the legacy 
   await assert.rejects(enrollWindowsDevice(privateDir, relayUrl, windowsRoot), /already initialized/);
   const windows = await loadWindowsDevice(privateDir);
   assert.equal(windows.config.allowWrites, false);
+  assert.deepEqual(windows.config.windowsPackages, []);
+  await assert.rejects(setWindowsPackages(privateDir, ['--source']), /exact WinGet package IDs/);
   assert.equal(deviceFingerprint(windows.token), fingerprint);
   assert.notEqual(windows.token, fingerprint);
   assert.throws(() => validateRelayConfig({ ...relayConfig, windowsDeviceFingerprint: deviceFingerprint(macToken) }),
@@ -97,6 +99,7 @@ test('Windows enrollment is owner scoped and routes independently of the legacy 
     assert.ok(listed.includes('windows_fs_create'));
     assert.ok(listed.includes('windows_fs_apply_patch'));
     assert.ok(listed.includes('windows_fs_delete'));
+    assert.ok(listed.includes('windows_package_install'));
     assert.ok(!listed.includes('windows_terminal_start'));
     assert.equal(await forbidden(macToken, 'windows'), 403);
     assert.equal(await forbidden(windows.token), 403);
@@ -118,6 +121,7 @@ test('Windows enrollment is owner scoped and routes independently of the legacy 
     const createArgs = { path: createdFile, content: 'hello\n' };
     try {
       assert.match(JSON.stringify((await call('windows_fs_create', createArgs)).content), /AGENT_UPDATE_REQUIRED/);
+      assert.match(JSON.stringify((await call('windows_package_catalog')).content), /AGENT_UPDATE_REQUIRED/);
     } finally {
       legacySocket.close();
       await legacyClosed.promise;
@@ -127,6 +131,8 @@ test('Windows enrollment is owner scoped and routes independently of the legacy 
     assert.match(JSON.stringify((await call('windows_fs_search', { directory: windowsRoot, query: 'fixture' })).content),
       /example.txt/);
     assert.match(JSON.stringify((await call('windows_fs_create', createArgs)).content), /WRITE_DISABLED/);
+    assert.match(JSON.stringify((await call('windows_package_install', { id: 'CodeBlocks.CodeBlocks.MinGW' })).content),
+      /PACKAGE_DENIED/);
     assert.match(JSON.stringify((await call('fs_read', { path: macFile })).content), /Mac agent is offline/);
     assert.equal(await forbidden(windows.token, 'windows'), 403);
     await connect(configSchema.parse({ allowedRoots: [macRoot] }), macToken, macAbort.signal);
@@ -147,6 +153,7 @@ test('Windows enrollment is owner scoped and routes independently of the legacy 
       await delay(10);
     }
     await setWindowsWrites(privateDir, true);
+    await setWindowsPackages(privateDir, ['CodeBlocks.CodeBlocks.MinGW']);
     const writable = await loadWindowsDevice(privateDir);
     assert.equal(writable.token, windows.token);
     await connect(writable.config, writable.token, windowsWriteAbort.signal, true);
@@ -156,6 +163,8 @@ test('Windows enrollment is owner scoped and routes independently of the legacy 
       return JSON.parse(item.text);
     };
     assert.equal((await data('windows_device_status')).data.writesEnabled, true);
+    assert.deepEqual((await data('windows_package_catalog')).data.approved, ['CodeBlocks.CodeBlocks.MinGW']);
+    assert.equal((await data('windows_package_install', { id: 'ApacheFriends.Xampp.8.2' })).error.code, 'PACKAGE_DENIED');
     const created = await data('windows_fs_create', createArgs);
     assert.equal(created.ok, true);
     assert.equal(await readFile(createdFile, 'utf8'), createArgs.content);

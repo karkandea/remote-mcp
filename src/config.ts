@@ -31,6 +31,7 @@ export const configSchema = z.object({
   allowedRoots: z.array(z.string()).default([]),
   deniedNames: z.array(z.string()).default([]),
   allowWrites: z.boolean().default(false),
+  windowsPackages: z.array(z.string().regex(/^[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)+$/).max(100)).max(20).default([]),
   // A remote caller can only stop processes explicitly opted in by the Mac owner.
   processStopAllowlist: z.array(z.string().regex(/^[A-Za-z0-9._-]{1,100}$/)).max(50).default([]),
   // Profiles map a public alias to an exact local .app bundle path.

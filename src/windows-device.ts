@@ -10,6 +10,14 @@ import { PathPolicy } from './policy.js';
 
 export const DEVICE_HEADER = 'x-remote-mcp-device';
 export const WINDOWS_FILE_WRITES_HEADER = 'x-remote-mcp-windows-file-writes';
+export const WINDOWS_PACKAGES_HEADER = 'x-remote-mcp-windows-packages';
+const packageId = z.string().regex(/^[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)+$/).max(100);
+export const WINDOWS_PACKAGE_TOOLS = {
+  package_catalog: z.object({}).strict(),
+  package_query: z.object({ id: packageId, mode: z.enum(['available', 'installed']) }).strict(),
+  package_install: z.object({ id: packageId }).strict(),
+  package_job: z.object({ executionId: z.uuid() }).strict(),
+};
 export const WINDOWS_WRITE_TOOLS = {
   fs_create: z.object({ path: z.string(), content: z.string() }),
   fs_apply_patch: z.object({ path: z.string(), expectedText: z.string().min(1), replacementText: z.string(),
@@ -25,6 +33,7 @@ export const WINDOWS_TOOLS = {
   device_status: z.object({}),
   device_disconnect: z.object({}),
   ...WINDOWS_WRITE_TOOLS,
+  ...WINDOWS_PACKAGE_TOOLS,
 };
 
 const enrollmentSchema = z.object({
@@ -97,6 +106,17 @@ export async function setWindowsWrites(directory: string, enabled: boolean): Pro
   else await rm(setting, { force: true });
 }
 
+const approvedPackages = configSchema.shape.windowsPackages;
+
+export async function setWindowsPackages(directory: string, ids: string[]): Promise<void> {
+  await readEnrollment(directory);
+  const validated = approvedPackages.safeParse([...new Set(ids)]);
+  if (!validated.success) throw new AgentError('INVALID_PACKAGES', 'Expected up to 20 exact WinGet package IDs');
+  const file = path.join(directory, 'approved-packages.json');
+  if (validated.data.length) await writeFile(file, JSON.stringify(validated.data) + '\n', { mode: 0o600 });
+  else await rm(file, { force: true });
+}
+
 export async function loadWindowsDevice(directory: string) {
   const enrollment = await readEnrollment(directory);
   const config = await windowsConfig(directory, enrollment.allowedRoot);
@@ -106,6 +126,12 @@ export async function loadWindowsDevice(directory: string) {
       if (error.code === 'ENOENT') return false;
       throw error;
     });
-  return { config: { ...config, allowWrites },
+  const windowsPackages = await readFile(path.join(directory, 'approved-packages.json'), 'utf8').then(
+    raw => approvedPackages.parse(JSON.parse(raw)),
+    error => {
+      if (error.code === 'ENOENT') return [];
+      throw error;
+    });
+  return { config: { ...config, allowWrites, windowsPackages },
     device: windowsDeviceState(directory), url: enrollment.relayUrl, token: enrollment.token };
 }
