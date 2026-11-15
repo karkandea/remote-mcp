@@ -8,7 +8,7 @@ import { AgentError } from './errors.js';
 import { MAX_FRAME_BYTES, toolUnavailable, type RelayCall, type RelayReply } from './relay-channel.js';
 import { createContext, createServer } from './server.js';
 import { monitorWebSocketHeartbeat } from './websocket-heartbeat.js';
-import { DEVICE_HEADER, WINDOWS_TOOLS } from './windows-device.js';
+import { DEVICE_HEADER, WINDOWS_FILE_WRITES_HEADER, WINDOWS_TOOLS } from './windows-device.js';
 
 export type DisconnectEvent = {
   closeCode: number;
@@ -47,7 +47,7 @@ export function validateAgentConnection(options: AgentConnectionOptions): void {
   }
 }
 
-/** Makes outgoing connections only. Windows exposes only its read-only file and device tools. */
+/** Makes outgoing connections only. Windows exposes its approved file and device tools. */
 export async function runRemoteAgent(config: AgentConfig, options: AgentConnectionOptions,
   windows?: WindowsTarget): Promise<void> {
   validateAgentConnection(options);
@@ -57,14 +57,17 @@ export async function runRemoteAgent(config: AgentConfig, options: AgentConnecti
   }
   const ctx = await createContext(config, windows?.device);
   await ctx.device.assertConnected();
-  const local = createServer(ctx, windows ? 'remote-mcp windows-resume' : undefined);
+  const local = createServer(ctx, windows ? 'remote-mcp windows-resume' : undefined, !!windows);
   const client = new Client({ name: 'remote-mcp-agent-relay', version: '0.1.0-alpha.1' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([local.connect(serverTransport), client.connect(clientTransport)]);
   try {
     const allowed = new Set(windows ? Object.keys(WINDOWS_TOOLS) : (await client.listTools()).tools.map(tool => tool.name));
     const headers: Record<string, string> = { Authorization: `Bearer ${options.token}` };
-    if (windows) headers[DEVICE_HEADER] = 'windows';
+    if (windows) {
+      headers[DEVICE_HEADER] = 'windows';
+      headers[WINDOWS_FILE_WRITES_HEADER] = '1';
+    }
     let retryAttempt = 0;
     while (!options.signal?.aborted) {
       let openedAt = 0;

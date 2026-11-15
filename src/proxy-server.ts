@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { AgentError, toResult } from './errors.js';
 import type { RelayChannel } from './relay-channel.js';
-import { WINDOWS_TOOLS } from './windows-device.js';
+import { WINDOWS_TOOLS, WINDOWS_WRITE_TOOLS } from './windows-device.js';
 import { auditVpsStorage, vpsHostStatus, listVpsIterations, recordVpsIteration } from './vps-storage.js';
 import { callRootHelper, type RootOperation } from './root-helper.js';
 
@@ -17,13 +17,18 @@ export function createProxyServer(channel: RelayChannel, storageAudit: () => Pro
       fs_read: 'Read a bounded UTF-8 file inside the approved Windows folder',
       fs_stat: 'Inspect file or directory metadata inside the approved Windows folder',
       fs_search: 'Search for literal text inside the approved Windows folder',
+      fs_create: 'Create a small UTF-8 file in the approved Windows folder without overwriting an existing file',
+      fs_apply_patch: 'Replace one occurrence in a UTF-8 file in the approved Windows folder, using the SHA-256 from windows_fs_read',
+      fs_delete: 'Permanently delete a small UTF-8 file in the approved Windows folder, using the SHA-256 from windows_fs_read',
       device_status: 'Show connected Windows device status and its approved folder',
       device_disconnect: 'Revoke access until the Windows owner resumes locally',
     };
     for (const name of Object.keys(WINDOWS_TOOLS) as Array<keyof typeof WINDOWS_TOOLS>) {
       server.registerTool(`windows_${name}`, { ...auth, description: descriptions[name],
-        annotations: { readOnlyHint: name !== 'device_disconnect' }, inputSchema: WINDOWS_TOOLS[name] },
-      (args: Record<string, unknown>) => windows.call(name, args));
+        annotations: { readOnlyHint: name !== 'device_disconnect' && !Object.hasOwn(WINDOWS_WRITE_TOOLS, name),
+          destructiveHint: name === 'fs_apply_patch' || name === 'fs_delete', openWorldHint: false },
+        inputSchema: WINDOWS_TOOLS[name] },
+      (args: Record<string, unknown>) => windows.call(name, args, true));
     }
   }
   server.registerTool('vps_storage_audit', { ...auth,

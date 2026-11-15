@@ -4,7 +4,7 @@ import type { Duplex } from 'node:stream';
 import type { CallToolResult } from '@modelcontextprotocol/server';
 import WebSocket, { WebSocketServer } from 'ws';
 import { monitorWebSocketHeartbeat } from './websocket-heartbeat.js';
-import { DEVICE_HEADER, deviceFingerprint } from './windows-device.js';
+import { DEVICE_HEADER, WINDOWS_FILE_WRITES_HEADER, WINDOWS_WRITE_TOOLS, deviceFingerprint } from './windows-device.js';
 
 export const MAX_FRAME_BYTES = 1_048_576;
 const MAX_PENDING = 16;
@@ -32,6 +32,7 @@ export class RelayChannel {
   private disconnectedAt?: string;
   private lastPongAt?: string;
   private disconnectCount = 0;
+  private supportsFileWrites = false;
 
   constructor(private readonly agentName = 'Mac agent') {}
 
@@ -44,9 +45,10 @@ export class RelayChannel {
       disconnectCount: this.disconnectCount, pendingRequests: this.pending.size };
   }
 
-  attach(socket: WebSocket): boolean {
+  attach(socket: WebSocket, supportsFileWrites = false): boolean {
     if (this.connected) return false;
     this.socket = socket;
+    this.supportsFileWrites = supportsFileWrites;
     this.connectedAt = new Date().toISOString();
     this.lastPongAt = this.connectedAt;
     process.stderr.write(`${this.connectedAt} Remote MCP relay device_connected\n`);
@@ -88,9 +90,14 @@ export class RelayChannel {
     this.pending.clear();
   }
 
-  async call(name: string, args: Record<string, unknown>): Promise<CallToolResult> {
+  async call(name: string, args: Record<string, unknown>, windows = false): Promise<CallToolResult> {
     const socket = this.socket;
     if (!socket || socket.readyState !== WebSocket.OPEN) return toolUnavailable(`${this.agentName} is offline`);
+    if (windows && Object.hasOwn(WINDOWS_WRITE_TOOLS, name) && !this.supportsFileWrites) {
+      return { isError: true, content: [{ type: 'text', text: JSON.stringify({
+        ok: false, error: { code: 'AGENT_UPDATE_REQUIRED', message: 'Update the Windows agent to use file writes' },
+      }) }] };
+    }
     if (this.pending.size >= MAX_PENDING) return toolUnavailable('Too many concurrent tool requests');
     const id = randomUUID();
     const payload = JSON.stringify({ type: 'call', id, name, args } satisfies RelayCall);
@@ -139,8 +146,9 @@ export function createAgentSocketServer(channel: RelayChannel, secret: string,
         return;
       }
       const authorizedChannel = target;
+      const supportsFileWrites = device === 'windows' && req.headers[WINDOWS_FILE_WRITES_HEADER] === '1';
       server.handleUpgrade(req, socket, head, ws => {
-        if (!authorizedChannel.attach(ws)) ws.close(1008, 'Device already online');
+        if (!authorizedChannel.attach(ws, supportsFileWrites)) ws.close(1008, 'Device already online');
       });
     },
     async close() {
