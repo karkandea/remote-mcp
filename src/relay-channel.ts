@@ -4,6 +4,7 @@ import type { Duplex } from 'node:stream';
 import type { CallToolResult } from '@modelcontextprotocol/server';
 import WebSocket, { WebSocketServer } from 'ws';
 import { monitorWebSocketHeartbeat } from './websocket-heartbeat.js';
+import { DEVICE_HEADER, deviceFingerprint } from './windows-device.js';
 
 export const MAX_FRAME_BYTES = 1_048_576;
 const MAX_PENDING = 16;
@@ -31,6 +32,8 @@ export class RelayChannel {
   private disconnectedAt?: string;
   private lastPongAt?: string;
   private disconnectCount = 0;
+
+  constructor(private readonly agentName = 'Mac agent') {}
 
   get connected(): boolean { return this.socket?.readyState === WebSocket.OPEN; }
 
@@ -80,14 +83,14 @@ export class RelayChannel {
     process.stderr.write(`${this.disconnectedAt} Remote MCP relay device_disconnected count=${this.disconnectCount}\n`);
     for (const item of this.pending.values()) {
       clearTimeout(item.timer);
-      item.resolve(toolUnavailable('Mac agent disconnected'));
+      item.resolve(toolUnavailable(`${this.agentName} disconnected`));
     }
     this.pending.clear();
   }
 
   async call(name: string, args: Record<string, unknown>): Promise<CallToolResult> {
     const socket = this.socket;
-    if (!socket || socket.readyState !== WebSocket.OPEN) return toolUnavailable('Mac agent is offline');
+    if (!socket || socket.readyState !== WebSocket.OPEN) return toolUnavailable(`${this.agentName} is offline`);
     if (this.pending.size >= MAX_PENDING) return toolUnavailable('Too many concurrent tool requests');
     const id = randomUUID();
     const payload = JSON.stringify({ type: 'call', id, name, args } satisfies RelayCall);
@@ -95,7 +98,7 @@ export class RelayChannel {
     return await new Promise<CallToolResult>(resolve => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        resolve(toolUnavailable('Mac agent response timed out'));
+        resolve(toolUnavailable(`${this.agentName} response timed out`));
       }, CALL_TIMEOUT_MS);
       this.pending.set(id, { resolve, timer });
       socket.send(payload, error => {
@@ -110,7 +113,8 @@ export class RelayChannel {
   close(): void { if (this.socket) this.socket.close(1001, 'Relay stopping'); }
 }
 
-export function createAgentSocketServer(channel: RelayChannel, secret: string): {
+export function createAgentSocketServer(channel: RelayChannel, secret: string,
+  windows?: { channel: RelayChannel; fingerprint: string }): {
   upgrade: (req: IncomingMessage, socket: Duplex, head: Buffer) => void;
   close: () => Promise<void>;
 } {
@@ -121,18 +125,27 @@ export function createAgentSocketServer(channel: RelayChannel, secret: string): 
       let pathname: string;
       try { pathname = new URL(req.url ?? '/', 'http://localhost').pathname; }
       catch { socket.destroy(); return; }
-      if (pathname !== '/agent/ws' || req.headers.origin ||
-          !safeTokenEqual(req.headers.authorization, secret) || channel.connected) {
+      const device = req.headers[DEVICE_HEADER];
+      const bearer = req.headers.authorization;
+      let target: RelayChannel | undefined;
+      if (device === undefined && safeTokenEqual(bearer, secret)) target = channel;
+      if (windows && device === 'windows' && bearer && /^Bearer [a-f0-9]{64}$/.test(bearer) &&
+          safeTokenEqual(`Bearer ${deviceFingerprint(bearer.slice(7))}`, windows.fingerprint)) {
+        target = windows.channel;
+      }
+      if (pathname !== '/agent/ws' || req.headers.origin || !target || target.connected) {
         socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
         socket.destroy();
         return;
       }
+      const authorizedChannel = target;
       server.handleUpgrade(req, socket, head, ws => {
-        if (!channel.attach(ws)) ws.close(1008, 'Device already online');
+        if (!authorizedChannel.attach(ws)) ws.close(1008, 'Device already online');
       });
     },
     async close() {
       channel.close();
+      windows?.channel.close();
       for (const client of server.clients) client.terminate();
       await new Promise<void>(resolve => server.close(() => resolve()));
     },

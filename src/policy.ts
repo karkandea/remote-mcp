@@ -15,12 +15,27 @@ const protectedNames = new Set([
   '.docker', '.kube', 'id_rsa', 'id_ed25519',
 ]);
 
+export function isLocalWindowsPath(input: string): boolean {
+  // Reject device/UNC paths, drive-relative paths, alternate streams and DOS aliases.
+  const localDrive = /^[A-Za-z]:[\\/]/.test(input);
+  return localDrive && input.slice(3).split(/[\\/]/).every(segment =>
+    !/[:<>"|?*\x00-\x1f]|[ .]$|~[0-9]|^(?:CON|PRN|AUX|NUL|COM[0-9¹²³]|LPT[0-9¹²³])(?:\.|$)/iu.test(segment));
+}
+
+function assertAbsolutePath(input: string): void {
+  if (!path.isAbsolute(input) || (process.platform === 'win32' && !isLocalWindowsPath(input))) {
+    throw new AgentError('INVALID_PATH', 'An absolute path on a local drive is required');
+  }
+}
+
 export class PathPolicy {
   private constructor(private readonly config: AgentConfig, private readonly roots: string[]) {}
 
   static async create(config: AgentConfig): Promise<PathPolicy> {
     const roots = await Promise.all(config.allowedRoots.map(async root => {
+      if (process.platform === 'win32') assertAbsolutePath(root);
       const resolved = await realpath(root);
+      if (process.platform === 'win32') assertAbsolutePath(resolved);
       const info = await stat(resolved);
       if (!info.isDirectory()) throw new AgentError('INVALID_ROOT', `Not a directory: ${root}`);
       return resolved;
@@ -46,10 +61,11 @@ export class PathPolicy {
   }
 
   async readPath(input: string): Promise<string> {
-    if (!path.isAbsolute(input)) throw new AgentError('INVALID_PATH', 'An absolute path is required');
+    assertAbsolutePath(input);
     const normalized = path.resolve(input);
     this.denySensitive(normalized);
     const canonical = await realpath(normalized);
+    if (process.platform === 'win32') assertAbsolutePath(canonical);
     this.ensureAllowed(canonical);
     // Reject a symlink at the final component. Parent symlinks are checked by canonical containment.
     const info = await lstat(normalized);

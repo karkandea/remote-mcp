@@ -4,9 +4,22 @@ import { configPath, initConfig, loadConfig } from './config.js';
 import { DeviceState } from './device.js';
 import { runStdio } from './server.js';
 import { toResult } from './errors.js';
-import { runRemoteAgent } from './remote-agent.js';
+import { runRemoteAgent, validateAgentUrl, type AgentConnectionOptions } from './remote-agent.js';
 import { relayConfigFromEnv, startRelayServer } from './relay-server.js';
 import { startRootHelper } from './root-helper.js';
+import { enrollWindowsDevice, loadWindowsDevice, windowsAgentDirectory, windowsDeviceState, windowsFingerprint } from './windows-device.js';
+
+function agentConnectionOptions(): Pick<AgentConnectionOptions, 'signal' | 'onConnect' | 'onDisconnect'> {
+  const abort = new AbortController();
+  process.once('SIGINT', () => abort.abort());
+  process.once('SIGTERM', () => abort.abort());
+  return {
+    signal: abort.signal,
+    onConnect: () => process.stderr.write(`${new Date().toISOString()} Remote MCP agent connected\n`),
+    onDisconnect: ({ closeCode, errorCode, connectedMs, retryInMs }) =>
+      process.stderr.write(`${new Date().toISOString()} Remote MCP agent disconnected code=${closeCode} error=${errorCode ?? 'none'} connectedMs=${connectedMs} retryMs=${retryInMs}\n`),
+  };
+}
 
 async function main(): Promise<void> {
   const command = process.argv[2] ?? 'help';
@@ -20,18 +33,39 @@ async function main(): Promise<void> {
       await runStdio(await loadConfig());
       return;
     case 'agent': {
-      const abort = new AbortController();
-      process.once('SIGINT', () => abort.abort());
-      process.once('SIGTERM', () => abort.abort());
       await runRemoteAgent(await loadConfig(), {
         url: process.env.REMOTE_MCP_RELAY_WS ?? '', token: process.env.RELAY_DEVICE_TOKEN ?? '',
-        signal: abort.signal,
-        onConnect: () => process.stderr.write(`${new Date().toISOString()} Remote MCP agent connected\n`),
-        onDisconnect: ({ closeCode, errorCode, connectedMs, retryInMs }) =>
-          process.stderr.write(`${new Date().toISOString()} Remote MCP agent disconnected code=${closeCode} error=${errorCode ?? 'none'} connectedMs=${connectedMs} retryMs=${retryInMs}\n`),
+        ...agentConnectionOptions(),
       });
       return;
     }
+    case 'windows-init': {
+      const [, , , relayUrl, allowedRoot] = process.argv;
+      if (!relayUrl || !allowedRoot) {
+        process.stdout.write('Usage: remote-mcp windows-init <relay-url> <approved-folder>\n');
+        process.exitCode = 2;
+        return;
+      }
+      validateAgentUrl(relayUrl);
+      process.stdout.write((await enrollWindowsDevice(windowsAgentDirectory(), relayUrl, allowedRoot)) + '\n');
+      return;
+    }
+    case 'windows-fingerprint':
+      process.stdout.write((await windowsFingerprint(windowsAgentDirectory())) + '\n');
+      return;
+    case 'windows-agent': {
+      const { config, device, url, token } = await loadWindowsDevice(windowsAgentDirectory());
+      await runRemoteAgent(config, { url, token, ...agentConnectionOptions() }, { device });
+      return;
+    }
+    case 'windows-stop':
+      await windowsDeviceState(windowsAgentDirectory()).disconnect();
+      process.stdout.write('Windows access revoked. Press Ctrl+C in the agent window to disconnect.\n');
+      return;
+    case 'windows-resume':
+      await windowsDeviceState(windowsAgentDirectory()).resumeLocally();
+      process.stdout.write('Windows access re-enabled. Start windows-agent.\n');
+      return;
     case 'relay': {
       const relay = await startRelayServer(relayConfigFromEnv());
       process.stderr.write(`Relay listening on 127.0.0.1:${relay.port}\n`);
@@ -82,7 +116,7 @@ async function main(): Promise<void> {
       process.stdout.write('Local access re-enabled. Restart the MCP host connection.\n');
       return;
     default:
-      process.stdout.write('Usage: remote-mcp <init|start|agent|relay|root-helper|stop|resume|status|doctor|config>\n');
+      process.stdout.write('Usage: remote-mcp <init|start|agent|relay|root-helper|stop|resume|status|doctor|config|windows-init|windows-fingerprint|windows-agent|windows-stop|windows-resume>\n');
       if (command !== 'help') process.exitCode = 2;
   }
 }

@@ -28,7 +28,7 @@ export async function createContext(config: AgentConfig, device = new DeviceStat
     processes: new ProcessTools(config), system: new SystemTools(config), iphone: new IphoneTools(config.iphoneControl) };
 }
 
-export function createServer(ctx: AgentContext): McpServer {
+export function createServer(ctx: AgentContext, resumeCommand = 'remote-mcp resume'): McpServer {
   const server = new McpServer({ name: 'remote-mcp', version: '0.1.0-alpha.1' });
   const wrap = <T>(name: string, action: (args: T) => Promise<unknown> | unknown, allowDisconnected = false) =>
     async (args: T) => {
@@ -159,7 +159,7 @@ export function createServer(ctx: AgentContext): McpServer {
       await ctx.device.disconnect();
       ctx.commands.cancelAll();
       if (ctx.config.iphoneControl.enabled) await ctx.iphone.stop().catch(() => {});
-      return { localAccessEnabled: false, resume: 'remote-mcp resume (local-only)' };
+      return { localAccessEnabled: false, resume: `${resumeCommand} (local-only)` };
     }));
   return server;
 }

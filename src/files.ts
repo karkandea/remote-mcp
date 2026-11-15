@@ -49,10 +49,16 @@ export class FileTools {
 
   async read(input: string): Promise<unknown> {
     const target = await this.policy.readPath(input);
-    const handle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const handle = await open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
     try {
       const info = await handle.stat();
       if (!info.isFile()) throw new AgentError('NOT_FILE', 'Expected a regular file');
+      if (process.platform === 'win32') {
+        const checked = await stat(await this.policy.readPath(target));
+        if (checked.dev !== info.dev || checked.ino !== info.ino) {
+          throw new AgentError('PATH_CHANGED', 'File changed while opening it');
+        }
+      }
       if (info.size > this.config.maxReadBytes) throw new AgentError('FILE_TOO_LARGE', 'File exceeds read limit');
       const value = await readBounded(handle, this.config.maxReadBytes);
       if (value.includes(0)) throw new AgentError('BINARY_FILE', 'Binary files are not supported');
