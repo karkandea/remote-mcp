@@ -6,6 +6,7 @@ import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { createProxyServer } from './proxy-server.js';
 import { createAgentSocketServer, RelayChannel } from './relay-channel.js';
 import { auditVpsStorage } from './vps-storage.js';
+import { deviceFingerprint } from './windows-device.js';
 
 export type RelayConfig = {
   publicOrigin: string;
@@ -16,6 +17,7 @@ export type RelayConfig = {
   bind: string;
   port: number;
   rootHelperSocket?: string;
+  windowsDeviceFingerprint?: string;
 };
 
 export function relayConfigFromEnv(env: NodeJS.ProcessEnv = process.env): RelayConfig {
@@ -25,6 +27,7 @@ export function relayConfigFromEnv(env: NodeJS.ProcessEnv = process.env): RelayC
     deviceToken: env.RELAY_DEVICE_TOKEN ?? '', bind: env.RELAY_BIND ?? '127.0.0.1',
     port: Number(env.RELAY_PORT ?? '3417'),
     rootHelperSocket: env.RELAY_ROOT_HELPER_SOCKET || undefined,
+    windowsDeviceFingerprint: env.RELAY_WINDOWS_DEVICE_FINGERPRINT,
   };
 }
 
@@ -46,6 +49,11 @@ export function validateRelayConfig(config: RelayConfig): void {
   if (issuer.origin !== jwks.origin) throw new Error('JWKS must be hosted on the OAuth issuer origin');
   if (!config.ownerSubject || config.ownerSubject.length > 300) throw new Error('RELAY_OWNER_SUB required');
   if (Buffer.byteLength(config.deviceToken) < 32) throw new Error('RELAY_DEVICE_TOKEN must be at least 32 random bytes');
+  if (config.windowsDeviceFingerprint !== undefined &&
+      (!/^[a-f0-9]{64}$/.test(config.windowsDeviceFingerprint) ||
+       config.windowsDeviceFingerprint === deviceFingerprint(config.deviceToken))) {
+    throw new Error('RELAY_WINDOWS_DEVICE_FINGERPRINT must be a SHA-256 fingerprint distinct from the Mac credential');
+  }
   if (!Number.isInteger(config.port) || config.port < 0 || config.port > 65535) throw new Error('Invalid RELAY_PORT');
   // Security default: Nginx reverse-proxies loopback. Never bind relay to a public interface.
   if (config.bind !== '127.0.0.1' && config.bind !== '::1') throw new Error('Relay must bind to loopback');
@@ -91,8 +99,10 @@ export async function startRelayServer(config: RelayConfig,
   Promise<{ port: number; channel: RelayChannel; close: () => Promise<void> }> {
   validateRelayConfig(config);
   const channel = new RelayChannel();
-  const agentSockets = createAgentSocketServer(channel, config.deviceToken);
-  const handler = createMcpHandler(() => createProxyServer(channel, storageAudit, config.rootHelperSocket),
+  const windows = config.windowsDeviceFingerprint ?
+    { channel: new RelayChannel('Windows agent'), fingerprint: config.windowsDeviceFingerprint } : undefined;
+  const agentSockets = createAgentSocketServer(channel, config.deviceToken, windows);
+  const handler = createMcpHandler(() => createProxyServer(channel, storageAudit, config.rootHelperSocket, windows?.channel),
     { maxRequestBodySize: 1_048_576 });
   const metadataPath = '/.well-known/oauth-protected-resource';
   const metadataUrl = `${config.publicOrigin}${metadataPath}`;

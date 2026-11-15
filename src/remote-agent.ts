@@ -3,10 +3,12 @@ import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
 import WebSocket from 'ws';
 import type { AgentConfig } from './config.js';
+import type { DeviceState } from './device.js';
 import { AgentError } from './errors.js';
 import { MAX_FRAME_BYTES, toolUnavailable, type RelayCall, type RelayReply } from './relay-channel.js';
 import { createContext, createServer } from './server.js';
 import { monitorWebSocketHeartbeat } from './websocket-heartbeat.js';
+import { DEVICE_HEADER, WINDOWS_TOOLS } from './windows-device.js';
 
 export type DisconnectEvent = {
   closeCode: number;
@@ -23,8 +25,12 @@ export type AgentConnectionOptions = {
   onDisconnect?: (event: DisconnectEvent) => void;
 };
 
-export function validateAgentConnection(options: AgentConnectionOptions): void {
-  const url = new URL(options.url);
+type WindowsTarget = { device: DeviceState };
+
+export function validateAgentUrl(value: string): void {
+  let url: URL;
+  try { url = new URL(value); }
+  catch { throw new AgentError('INVALID_CONFIG', 'A valid relay WebSocket URL is required'); }
   const isLoopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
   if (url.protocol !== 'wss:' && !(url.protocol === 'ws:' && isLoopback)) {
     throw new AgentError('INVALID_CONFIG', 'Agent relay requires wss:// (ws:// only allowed on localhost)');
@@ -32,32 +38,40 @@ export function validateAgentConnection(options: AgentConnectionOptions): void {
   if (url.username || url.password || url.search || url.hash || url.pathname !== '/agent/ws') {
     throw new AgentError('INVALID_CONFIG', 'Relay WebSocket URL must end at /agent/ws without credentials or query');
   }
+}
+
+export function validateAgentConnection(options: AgentConnectionOptions): void {
+  validateAgentUrl(options.url);
   if (Buffer.byteLength(options.token) < 32 || /[\r\n]/.test(options.token)) {
     throw new AgentError('INVALID_CONFIG', 'RELAY_DEVICE_TOKEN must be a 32+ byte random secret');
   }
 }
 
-/** Runs on the Mac. Makes outgoing connections only; the relay cannot run arbitrary code. */
-export async function runRemoteAgent(config: AgentConfig, options: AgentConnectionOptions): Promise<void> {
+/** Makes outgoing connections only. Windows exposes only its read-only file and device tools. */
+export async function runRemoteAgent(config: AgentConfig, options: AgentConnectionOptions,
+  windows?: WindowsTarget): Promise<void> {
   validateAgentConnection(options);
-  if (process.platform !== 'darwin' && process.env.REMOTE_MCP_ALLOW_NON_MAC !== '1') {
-    throw new AgentError('UNSUPPORTED_PLATFORM', 'The remote agent targets macOS');
+  const expectedPlatform = windows ? 'win32' : 'darwin';
+  if (process.platform !== expectedPlatform && process.env.REMOTE_MCP_ALLOW_NON_MAC !== '1') {
+    throw new AgentError('UNSUPPORTED_PLATFORM', `The remote agent requires ${windows ? 'Windows' : 'macOS'}`);
   }
-  const ctx = await createContext(config);
+  const ctx = await createContext(config, windows?.device);
   await ctx.device.assertConnected();
-  const local = createServer(ctx);
+  const local = createServer(ctx, windows ? 'remote-mcp windows-resume' : undefined);
   const client = new Client({ name: 'remote-mcp-agent-relay', version: '0.1.0-alpha.1' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([local.connect(serverTransport), client.connect(clientTransport)]);
   try {
-    const allowed = new Set((await client.listTools()).tools.map(tool => tool.name));
+    const allowed = new Set(windows ? Object.keys(WINDOWS_TOOLS) : (await client.listTools()).tools.map(tool => tool.name));
+    const headers: Record<string, string> = { Authorization: `Bearer ${options.token}` };
+    if (windows) headers[DEVICE_HEADER] = 'windows';
     let retryAttempt = 0;
     while (!options.signal?.aborted) {
       let openedAt = 0;
       let closeCode = 1006;
       let errorCode: string | undefined;
       await new Promise<void>(resolve => {
-        const ws = new WebSocket(options.url, { headers: { Authorization: `Bearer ${options.token}` },
+        const ws = new WebSocket(options.url, { headers,
           maxPayload: MAX_FRAME_BYTES, handshakeTimeout: 10_000 });
         let active = 0;
         const abort = () => ws.terminate();

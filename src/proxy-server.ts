@@ -2,14 +2,30 @@ import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { AgentError, toResult } from './errors.js';
 import type { RelayChannel } from './relay-channel.js';
+import { WINDOWS_TOOLS } from './windows-device.js';
 import { auditVpsStorage, vpsHostStatus, listVpsIterations, recordVpsIteration } from './vps-storage.js';
 import { callRootHelper, type RootOperation } from './root-helper.js';
 
 /** Mac tool requests cross the agent channel; VPS inventory is read locally by the relay. */
 export function createProxyServer(channel: RelayChannel, storageAudit: () => Promise<unknown> = auditVpsStorage,
-  rootHelperSocket?: string): McpServer {
+  rootHelperSocket?: string, windows?: RelayChannel): McpServer {
   const server = new McpServer({ name: 'remote-mcp-relay', version: '0.1.0-alpha.1' });
   const auth = { _meta: { securitySchemes: [{ type: 'oauth2', scopes: ['mcp:tools'] }] } };
+  if (windows) {
+    const descriptions = {
+      fs_list: 'List entries inside the approved Windows folder',
+      fs_read: 'Read a bounded UTF-8 file inside the approved Windows folder',
+      fs_stat: 'Inspect file or directory metadata inside the approved Windows folder',
+      fs_search: 'Search for literal text inside the approved Windows folder',
+      device_status: 'Show connected Windows device status and its approved folder',
+      device_disconnect: 'Revoke access until the Windows owner resumes locally',
+    };
+    for (const name of Object.keys(WINDOWS_TOOLS) as Array<keyof typeof WINDOWS_TOOLS>) {
+      server.registerTool(`windows_${name}`, { ...auth, description: descriptions[name],
+        annotations: { readOnlyHint: name !== 'device_disconnect' }, inputSchema: WINDOWS_TOOLS[name] },
+      (args: Record<string, unknown>) => windows.call(name, args));
+    }
+  }
   server.registerTool('vps_storage_audit', { ...auth,
     description: 'Read-only disk-space inventory on the always-on Linux VPS relay: fixed directories, Docker summary and journal usage. No delete or arbitrary commands.',
     annotations: { readOnlyHint: true }, inputSchema: z.object({}) }, async () => {

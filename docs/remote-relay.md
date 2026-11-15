@@ -24,6 +24,7 @@ flowchart TD
 - HTTP: `POST /mcp` uses the official MCP Streamable HTTP SDK. Requests require `Authorization: Bearer` with an access token whose JWT signature, `iss`, `aud`, `exp`, owner `sub`, and `mcp:tools` scope pass verification. A JWKS URL on the identity provider's origin is required. Failed checks return `401` and an RFC 9728 resource metadata challenge.
 - Discovery: `GET /.well-known/oauth-protected-resource` advertises the resource, its OAuth issuer and scope. **The issuer must independently support authorization-code + PKCE S256 and ChatGPT-compatible CIMD, DCR, or predefined client configuration.** This relay intentionally does not implement its own authorization server.
 - Mac: `node dist/cli.js agent` connects outbound using a 32+ byte random `RELAY_DEVICE_TOKEN`. Only one Mac connection is accepted at a time; requests carry random correlated IDs and enforce frame size, concurrency and timeout limits.
+- Windows: the relay can also route a separately enrolled Windows device through the same WebSocket endpoint and OAuth-protected MCP connection. See [Windows device enrollment](windows-device.md).
 - Local policy: all Mac operations retain the Mac's allowed roots, denylist, write-disabled default, exact terminal profiles and persistent revocation. In particular, `agent` does **not** open a Mac listening port.
 - No GitHub Actions. The existing independently hosted VPS CI remains main-only and isolated from production.
 
@@ -174,6 +175,7 @@ The relay reads these variables when starting:
 | `RELAY_JWKS_URL` | HTTPS issuer-origin JWKS URL for JWT access-token verification |
 | `RELAY_OWNER_SUB` | Exact OAuth subject allowed to invoke Mac tools |
 | `RELAY_DEVICE_TOKEN` | Random private 32+ byte device secret; same on Mac |
+| `RELAY_WINDOWS_DEVICE_FINGERPRINT` | Optional SHA-256 fingerprint printed by `windows-init`; enables the separate Windows device |
 | `RELAY_BIND` | `127.0.0.1` (default); public binding rejected |
 | `RELAY_PORT` | `3417` (default) |
 
